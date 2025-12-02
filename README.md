@@ -6,22 +6,46 @@ USB Rotary Encoder Interface Using Raspberry Pi Pico
 
 This repository contains:
 
-- **[firmware/](firmware/)** - CircuitPython firmware for Raspberry Pi Pico that reads 4 rotary encoders with push buttons and sends USB HID keyboard events (F1-F12 keys)
-- **[windows-example/](windows-example/)** - C# example demonstrating how to capture and handle the keyboard events on Windows
+- **[firmware/](firmware/)** - CircuitPython firmware (easy to customize, no build required)
+- **[firmware-cpp/](firmware-cpp/)** - C++ firmware (high-performance, requires Pico SDK)
+- **[windows-example/](windows-example/)** - C# example for capturing keyboard events on Windows
+
+### Firmware Options
+
+| Feature | CircuitPython | C++ |
+|---------|---------------|-----|
+| **Startup time** | ~3-5 seconds | <100ms |
+| **Latency** | ~1-5ms | <100µs |
+| **Customization** | Edit text file | Recompile required |
+| **Best for** | Prototyping | Production |
 
 ### Installation
 
-1. **Pico Firmware Setup:**
-   - Install [CircuitPython](https://circuitpython.org/board/raspberry_pi_pico/) on your Raspberry Pi Pico
-   - Copy the [adafruit_hid library](https://circuitpython.org/libraries) to `CIRCUITPY/lib/`
-   - Copy `firmware/code.py` to the `CIRCUITPY` drive root
+#### Option A: CircuitPython (Easy)
 
-2. **Windows Example:**
+1. Install [CircuitPython](https://circuitpython.org/board/raspberry_pi_pico/) on your Pico
+2. Copy [adafruit_hid library](https://circuitpython.org/libraries) to `CIRCUITPY/lib/`
+3. Copy `firmware/code.py` to the `CIRCUITPY` drive
+
+#### Option B: C++ (High-Performance)
+
+1. Install [Pico SDK](https://github.com/raspberrypi/pico-sdk) and ARM GCC toolchain
+2. Build the firmware:
    ```bash
-   cd windows-example
-   dotnet build
-   dotnet run
+   cd firmware-cpp
+   mkdir build && cd build
+   cmake ..
+   make -j4
    ```
+3. Hold BOOTSEL, connect Pico via USB, copy `rotary_usb.uf2` to the `RPI-RP2` drive
+
+### Windows Example
+
+```bash
+cd windows-example
+dotnet build
+dotnet run
+```
 
 See the READMEs in each directory for detailed instructions.
 
