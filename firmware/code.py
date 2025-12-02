@@ -112,7 +112,9 @@ class Encoder:
         # Encoder state tracking
         # Read initial state (inverted because active-low)
         self.last_ab_state = self._read_ab_state()
-        self.steps = 0  # Accumulated steps (4 steps per detent)
+        # Accumulated steps - most encoders have 4 state changes per detent
+        # (adjust threshold in update() if your encoder behaves differently)
+        self.steps = 0
         
         # Button state tracking
         self.last_button_state = self.pin_sw.value  # True = not pressed (pull-up)

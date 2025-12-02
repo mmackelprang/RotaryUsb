@@ -69,8 +69,8 @@ private:
     // Debug
     uint8_t encoder_id_;
 
-    // Debounce timing (microseconds)
-    static constexpr uint32_t BUTTON_DEBOUNCE_US = 20000; // 20ms
+    // Debounce timing: 20ms = 20,000 microseconds
+    static constexpr uint32_t BUTTON_DEBOUNCE_US = 20000;
 
     // Quadrature state transition table
     // Maps (prev_state << 2 | curr_state) to direction

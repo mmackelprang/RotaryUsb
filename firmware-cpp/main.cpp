@@ -141,8 +141,10 @@ static const tusb_desc_device_t device_descriptor = {
     .bDeviceSubClass    = 0x00,
     .bDeviceProtocol    = 0x00,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
-    .idVendor           = 0xCAFE,  // Use your own VID
-    .idProduct          = 0x4004,  // Use your own PID
+    // Placeholder VID/PID for development - for commercial products,
+    // obtain official IDs from USB-IF or use Raspberry Pi Foundation's VID
+    .idVendor           = 0xCAFE,
+    .idProduct          = 0x4004,
     .bcdDevice          = 0x0100,
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,

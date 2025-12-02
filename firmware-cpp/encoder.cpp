@@ -5,6 +5,13 @@
 #include "pico/stdlib.h"
 #include <cstdio>
 
+// Debug output control - define NDEBUG to disable debug prints for production
+#ifndef NDEBUG
+#define DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define DEBUG_PRINT(...) ((void)0)
+#endif
+
 // Quadrature state transition table
 // Index: (prev_state << 2) | curr_state
 // Values: +1 = CW, -1 = CCW, 0 = invalid/no change
@@ -65,8 +72,8 @@ void Encoder::init() {
     last_ab_state_ = read_ab_state();
     last_button_state_ = gpio_get(pin_sw_);
 
-    printf("Encoder %d initialized: A=GP%d, B=GP%d, SW=GP%d\n",
-           encoder_id_, pin_a_, pin_b_, pin_sw_);
+    DEBUG_PRINT("Encoder %d initialized: A=GP%d, B=GP%d, SW=GP%d\n",
+                encoder_id_, pin_a_, pin_b_, pin_sw_);
 }
 
 uint8_t Encoder::read_ab_state() {
@@ -91,17 +98,18 @@ bool Encoder::update(uint8_t& keycode) {
             steps_ += direction;
 
             // Most encoders have 4 state changes per detent
+            // (adjust this value if your encoder behaves differently)
             // Send key event when a full detent is completed
             if (steps_ >= 4) {
                 keycode = keycode_cw_;
                 steps_ = 0;
-                printf("Encoder %d: CW -> Key 0x%02X\n", encoder_id_, keycode);
+                DEBUG_PRINT("Encoder %d: CW -> Key 0x%02X\n", encoder_id_, keycode);
                 last_ab_state_ = current_ab_state;
                 return true;
             } else if (steps_ <= -4) {
                 keycode = keycode_ccw_;
                 steps_ = 0;
-                printf("Encoder %d: CCW -> Key 0x%02X\n", encoder_id_, keycode);
+                DEBUG_PRINT("Encoder %d: CCW -> Key 0x%02X\n", encoder_id_, keycode);
                 last_ab_state_ = current_ab_state;
                 return true;
             }
@@ -124,13 +132,13 @@ bool Encoder::update(uint8_t& keycode) {
             if (!current_button_state && !button_pressed_) {
                 button_pressed_ = true;
                 keycode = keycode_btn_;
-                printf("Encoder %d: BTN -> Key 0x%02X\n", encoder_id_, keycode);
+                DEBUG_PRINT("Encoder %d: BTN -> Key 0x%02X\n", encoder_id_, keycode);
                 return true;
             }
             // Detect rising edge (button release)
             else if (current_button_state && button_pressed_) {
                 button_pressed_ = false;
-                printf("Encoder %d: Button released\n", encoder_id_);
+                DEBUG_PRINT("Encoder %d: Button released\n", encoder_id_);
             }
         }
     }
