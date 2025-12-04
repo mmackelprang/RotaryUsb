@@ -74,6 +74,259 @@ Notes:
 
 ---
 
+## Schematic and Wiring Diagram
+
+### System Block Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              USB HOST (PC)                                  │
+│                                   │                                         │
+│                              USB 5V / D+ / D-                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         RASPBERRY PI PICO                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                        POWER SECTION                                 │    │
+│  │   USB VBUS (5V) ──┬──► Internal 3.3V Regulator ──► 3V3 Pin (3.3V)   │    │
+│  │                   │                                                  │    │
+│  │                   └──► VBUS Pin (5V out - use with caution!)        │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                        GPIO SECTION (3.3V LOGIC)                    │    │
+│  │                                                                      │    │
+│  │   GP2  ◄──── Encoder 1 CLK (A)     GP11 ◄──── Encoder 4 CLK (A)    │    │
+│  │   GP3  ◄──── Encoder 1 DT  (B)     GP12 ◄──── Encoder 4 DT  (B)    │    │
+│  │   GP4  ◄──── Encoder 1 SW          GP13 ◄──── Encoder 4 SW         │    │
+│  │   GP5  ◄──── Encoder 2 CLK (A)                                      │    │
+│  │   GP6  ◄──── Encoder 2 DT  (B)     Internal Pull-ups: ENABLED      │    │
+│  │   GP7  ◄──── Encoder 2 SW          (~50-80kΩ to 3.3V on each GPIO) │    │
+│  │   GP8  ◄──── Encoder 3 CLK (A)                                      │    │
+│  │   GP9  ◄──── Encoder 3 DT  (B)                                      │    │
+│  │   GP10 ◄──── Encoder 3 SW                                           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+│   GND ◄───────────────────────────────────────────────────────► Common Ground  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+          ┌─────────────────────────┼─────────────────────────┐
+          │                         │                         │
+          ▼                         ▼                         ▼
+    ┌───────────┐             ┌───────────┐             ┌───────────┐
+    │ Encoder 1 │             │ Encoder 2 │             │    ...    │
+    │  KY-040   │             │  KY-040   │             │ Encoder 4 │
+    │           │             │           │             │           │
+    │ CLK DT SW │             │ CLK DT SW │             │ CLK DT SW │
+    │  +   GND  │             │  +   GND  │             │  +   GND  │
+    └───────────┘             └───────────┘             └───────────┘
+```
+
+### Detailed Wiring Schematic
+
+```
+                    RASPBERRY PI PICO (Top View)
+                    ┌─────────────────────────────┐
+                    │         [USB PORT]          │
+                    │            ┌─┐              │
+                    │            └─┘              │
+            GP0  ───┤ 1                        40 ├─── VBUS (5V from USB)
+            GP1  ───┤ 2                        39 ├─── VSYS
+            GND  ───┤ 3                        38 ├─── GND
+  Enc1 CLK  GP2  ───┤ 4                        37 ├─── 3V3_EN
+  Enc1 DT   GP3  ───┤ 5                        36 ├─── 3V3 (OUT) ◄── Power for encoders
+  Enc1 SW   GP4  ───┤ 6                        35 ├─── ADC_VREF
+  Enc2 CLK  GP5  ───┤ 7                        34 ├─── GP28
+  Enc2 DT   GP6  ───┤ 8                        33 ├─── GND
+  Enc2 SW   GP7  ───┤ 9                        32 ├─── GP27
+  Enc3 CLK  GP8  ───┤ 10                       31 ├─── GP26
+  Enc3 DT   GP9  ───┤ 11                       30 ├─── RUN
+  Enc3 SW   GP10 ───┤ 12                       29 ├─── GP22
+  Enc4 CLK  GP11 ───┤ 13                       28 ├─── GND
+  Enc4 DT   GP12 ───┤ 14                       27 ├─── GP21
+  Enc4 SW   GP13 ───┤ 15                       26 ├─── GP20
+            GND  ───┤ 16                       25 ├─── GP19
+            GP14 ───┤ 17                       24 ├─── GP18
+            GP15 ───┤ 18                       23 ├─── GND
+            GP16 ───┤ 19                       22 ├─── GP17
+            GP17 ───┤ 20                       21 ├─── GP16
+                    └─────────────────────────────┘
+
+               ENCODER MODULE (KY-040 Style)
+              ┌─────────────────────────────┐
+              │         ┌───────┐           │
+              │         │ENCODER│           │
+              │         │ KNOB  │           │
+              │         └───────┘           │
+              │                             │
+              │  [CLK] [DT] [SW] [+] [GND]  │
+              └───┬─────┬────┬───┬────┬────┘
+                  │     │    │   │    │
+                  │     │    │   │    └──────► Pico GND (Pin 3, 8, 13, 18, 23, 28, 33, 38)
+                  │     │    │   │
+                  │     │    │   └───────────► Pico 3V3 (Pin 36) OR leave NC*
+                  │     │    │
+                  │     │    └───────────────► Pico GPIO (SW pin)
+                  │     │
+                  │     └────────────────────► Pico GPIO (DT/B pin)
+                  │
+                  └──────────────────────────► Pico GPIO (CLK/A pin)
+
+              * NC = Not Connected (recommended when using internal pull-ups)
+```
+
+### Breadboard Wiring Example
+
+```
+ ENCODER 1        ENCODER 2        ENCODER 3        ENCODER 4
+ ┌───────┐        ┌───────┐        ┌───────┐        ┌───────┐
+ │ KY040 │        │ KY040 │        │ KY040 │        │ KY040 │
+ │  ┌─┐  │        │  ┌─┐  │        │  ┌─┐  │        │  ┌─┐  │
+ │  │○│  │        │  │○│  │        │  │○│  │        │  │○│  │
+ │  └─┘  │        │  └─┘  │        │  └─┘  │        │  └─┘  │
+ │C D S + G│      │C D S + G│      │C D S + G│      │C D S + G│
+ └┬─┬─┬─┬─┬┘      └┬─┬─┬─┬─┬┘      └┬─┬─┬─┬─┬┘      └┬─┬─┬─┬─┬┘
+  │ │ │ │ │        │ │ │ │ │        │ │ │ │ │        │ │ │ │ │
+  │ │ │ │ │        │ │ │ │ │        │ │ │ │ │        │ │ │ │ │
+  │ │ │ NC│        │ │ │ NC│        │ │ │ NC│        │ │ │ NC│
+  │ │ │   │        │ │ │   │        │ │ │   │        │ │ │   │
+  │ │ │   └────────┴─┴─┴───┴────────┴─┴─┴───┴────────┴─┴─┴───┴──► GND Rail
+  │ │ │            │ │ │            │ │ │            │ │ │
+  │ │ └──GP4       │ │ └──GP7       │ │ └──GP10      │ │ └──GP13
+  │ └────GP3       │ └────GP6       │ └────GP9       │ └────GP12
+  └──────GP2       └──────GP5       └──────GP8       └──────GP11
+
+                        BREADBOARD LAYOUT
+  ┌──────────────────────────────────────────────────────────────┐
+  │  ═══════════════════════════════════════════════════════════ │◄─ Power Rail (+)
+  │  ═══════════════════════════════════════════════════════════ │◄─ GND Rail (-)
+  │                                                              │
+  │   [ENC1]    [ENC2]    [ENC3]    [ENC4]     [PICO]           │
+  │    ○ ○ ○     ○ ○ ○     ○ ○ ○     ○ ○ ○     ┌─────┐          │
+  │    │ │ │     │ │ │     │ │ │     │ │ │     │ USB │          │
+  │    │ │ │     │ │ │     │ │ │     │ │ │     │     │          │
+  │    │ │ └─────┼─┼─┼─────┼─┼─┼─────┼─┼─┼─────┤GP4  │          │
+  │    │ └───────┼─┼─┼─────┼─┼─┼─────┼─┼─┼─────┤GP3  │          │
+  │    └─────────┼─┼─┼─────┼─┼─┼─────┼─┼─┼─────┤GP2  │          │
+  │              │ │ └─────┼─┼─┼─────┼─┼─┼─────┤GP7  │          │
+  │              │ └───────┼─┼─┼─────┼─┼─┼─────┤GP6  │          │
+  │              └─────────┼─┼─┼─────┼─┼─┼─────┤GP5  │          │
+  │                        │ │ └─────┼─┼─┼─────┤GP10 │          │
+  │                        │ └───────┼─┼─┼─────┤GP9  │          │
+  │                        └─────────┼─┼─┼─────┤GP8  │          │
+  │                                  │ │ └─────┤GP13 │          │
+  │                                  │ └───────┤GP12 │          │
+  │                                  └─────────┤GP11 │          │
+  │                                            │     │          │
+  │  ═══════════════════════════════════════════════════════════ │◄─ Connect to Pico GND
+  └──────────────────────────────────────────────────────────────┘
+```
+
+### Voltage Levels and Level Shifting
+
+#### Pico GPIO Voltage Characteristics
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| GPIO Logic Level | 3.3V | **All Pico GPIO pins are 3.3V only!** |
+| GPIO Input High (VIH) | ≥2.0V | Minimum voltage to read as HIGH |
+| GPIO Input Low (VIL) | ≤0.8V | Maximum voltage to read as LOW |
+| GPIO Output High (VOH) | ~3.3V | Output when driving HIGH |
+| GPIO Output Low (VOL) | ~0V | Output when driving LOW |
+| **Absolute Maximum** | **3.63V** | **Exceeding this WILL damage the Pico!** |
+| Internal Pull-up | ~50-80kΩ | Pulls GPIO to 3.3V when enabled |
+
+#### Why Level Shifting is NOT Required for KY-040 Encoders
+
+Despite being labeled as "5V" modules, KY-040 encoders work safely with the Pico because:
+
+1. **Open-Drain/Open-Collector Operation**: The encoder outputs (CLK, DT, SW) are mechanical switches that connect to GND when activated. They do not output voltage - they only pull the line LOW.
+
+2. **Pull-up Resistor Location**: When using internal pull-ups (recommended), the Pico's 3.3V internal pull-ups define the HIGH voltage level. The encoder module's onboard pull-ups (typically 10kΩ to VCC) are either:
+   - Not connected (if you leave the `+` pin unconnected)
+   - Connected to 3.3V (if you wire `+` to Pico 3V3)
+
+3. **Safe Signal Flow**:
+   ```
+   With internal pull-ups (RECOMMENDED):
+   
+   Pico GPIO ◄────┬──── ~50-80kΩ ────► 3.3V (internal pull-up)
+                  │
+                  └──── Encoder Switch ────► GND
+   
+   Switch OPEN:  GPIO reads HIGH (3.3V from internal pull-up)
+   Switch CLOSED: GPIO reads LOW (connected to GND through switch)
+   ```
+
+#### ⚠️ CRITICAL: Voltage Warnings
+
+| DO ✓ | DON'T ✗ |
+|------|---------|
+| Connect encoder `+` to Pico 3V3 (36) | Connect encoder `+` to 5V/VBUS (40) |
+| Leave encoder `+` unconnected (NC) | Apply >3.63V to any GPIO pin |
+| Use Pico's internal pull-ups | Mix 5V and 3.3V logic without level shifters |
+| Share common GND between all devices | Float GND connections |
+
+#### If Using Active 5V Sensors or Modules
+
+For other components that output 5V logic signals (NOT applicable to standard rotary encoders), you would need level shifting:
+
+```
+5V Device Output ────┬──── 10kΩ ────► 3.3V
+                     │
+                     └──── To Pico GPIO (now safe 3.3V max)
+   
+   OR use a dedicated level shifter IC (e.g., TXS0108E, BSS138-based)
+```
+
+### Power Supply Requirements
+
+#### Power Budget Analysis
+
+| Component | Typical Current | Max Current | Voltage |
+|-----------|----------------|-------------|---------|
+| Raspberry Pi Pico | 25-50mA | 100mA (active) | 5V via USB or 1.8-5.5V via VSYS |
+| KY-040 Encoder (×4) | ~0.5mA each | 2mA each | 3.3V |
+| Total System | ~30mA typical | ~110mA max | - |
+
+#### Power Supply Options
+
+**Option 1: USB Power (Recommended)**
+```
+PC USB Port ────► Pico USB ────► Pico 3V3 Regulator ────► Encoders & GPIO
+     │
+     └── Provides: 5V @ 500mA (USB 2.0) or 900mA (USB 3.0)
+         More than sufficient for this project
+```
+
+**Option 2: External 5V Supply via VSYS**
+```
+External 5V PSU ────► VSYS (Pin 39) ────► Pico 3V3 Regulator ────► Encoders
+                 │
+                 └── Also connect GND to Pico GND
+                     Useful for standalone/embedded applications
+```
+
+**Option 3: External 3.3V Supply via 3V3 Pin**
+```
+External 3.3V Regulated PSU ────► 3V3 (Pin 36) ────► Pico & Encoders
+                            │
+                            └── Bypass internal regulator
+                                Use regulated 3.3V only (not 3.7V!)
+                                Connect GND to Pico GND
+```
+
+#### Power Supply Recommendations
+
+1. **For Development/Normal Use**: USB power is sufficient and safest
+2. **For Standalone Applications**: Use a quality 5V regulated supply via VSYS
+3. **Current Capacity**: Minimum 200mA recommended (provides headroom)
+4. **USB Cable Quality**: Use a data-capable USB cable with adequate wire gauge (24 AWG or better for power)
+
+---
+
 ## Encoder Pinout And Pico Wiring
 
 ### Typical encoder pins
