@@ -37,3 +37,6 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 compile_commands.json
+
+# CodeQL artifacts
+_codeql_detected_source_root
