@@ -284,12 +284,9 @@ public class Program
                 if (report.Status == HidDeviceData.ReadStatus.Success && report.Data.Length >= 7)
                 {
                     // Parse the report
-                    // Note: HidLibrary may prepend a report ID byte, so we need to handle both cases
-                    int offset = 0;
-                    if (report.Data.Length >= 8 && report.Data[0] == 0x01)
-                    {
-                        offset = 1; // Skip report ID
-                    }
+                    // HidLibrary prepends a report ID byte to the data, so the first byte is always the Report ID (0x01)
+                    // Our actual data starts at index 1
+                    int offset = (report.Data.Length >= 8 && report.Data[0] == 0x01) ? 1 : 0;
                     
                     // Read encoder movements (signed bytes)
                     for (int i = 0; i < 4; i++)

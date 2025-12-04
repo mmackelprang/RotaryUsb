@@ -24,10 +24,10 @@ import usb_hid
 # Usage: 0x01 (Vendor Usage 1)
 # Report Size: 8 bytes
 #   Byte 0: Report ID (0x01)
-#   Byte 1: Encoder 1 position (signed 8-bit, relative movement)
-#   Byte 2: Encoder 2 position (signed 8-bit, relative movement)
-#   Byte 3: Encoder 3 position (signed 8-bit, relative movement)
-#   Byte 4: Encoder 4 position (signed 8-bit, relative movement)
+#   Byte 1: Encoder 1 movement (signed 8-bit, relative)
+#   Byte 2: Encoder 2 movement (signed 8-bit, relative)
+#   Byte 3: Encoder 3 movement (signed 8-bit, relative)
+#   Byte 4: Encoder 4 movement (signed 8-bit, relative)
 #   Byte 5: Button states (bit 0-3 for buttons 1-4, 1=pressed)
 #   Byte 6: Reserved
 #   Byte 7: Reserved

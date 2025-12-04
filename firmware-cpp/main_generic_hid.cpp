@@ -294,7 +294,12 @@ static const tusb_desc_device_t device_descriptor = {
     .bDeviceSubClass    = 0x00,
     .bDeviceProtocol    = 0x00,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
-    // Placeholder VID/PID for development
+    // WARNING: Placeholder VID/PID for development only!
+    // 0xCAFE is not an officially assigned Vendor ID and may conflict with other devices.
+    // For production use, either:
+    // 1. Obtain an official VID from USB-IF (https://www.usb.org/getting-vendor-id)
+    // 2. Use Raspberry Pi Foundation's VID with a sub-licensed PID
+    // 3. Use pid.codes for open source projects (https://pid.codes/)
     .idVendor           = 0xCAFE,
     .idProduct          = 0x4005,  // Different PID for Generic HID version
     .bcdDevice          = 0x0100,

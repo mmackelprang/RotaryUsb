@@ -210,12 +210,17 @@ def find_generic_hid_device():
     return None
 
 
-def to_signed_byte(value):
+def signed_to_unsigned_byte(value):
     """
-    Convert a signed integer (-127 to +127) to an unsigned byte (0-255).
+    Convert a signed integer to an unsigned byte using two's complement.
     
-    This is needed because send_report expects bytes, but we want to
-    represent signed movement values.
+    Args:
+        value: Signed integer in range -127 to +127
+    
+    Returns:
+        Unsigned byte (0-255) representing the two's complement value.
+        This is needed because send_report expects unsigned bytes, but we
+        want to transmit signed movement values.
     """
     if value < 0:
         return (256 + value) & 0xFF
@@ -280,7 +285,7 @@ def main():
             # Build the HID report
             for i, encoder in enumerate(encoders):
                 movement = encoder.get_and_clear_movement()
-                report[i] = to_signed_byte(movement)
+                report[i] = signed_to_unsigned_byte(movement)
             
             report[4] = button_states  # Button states
             report[5] = 0x00           # Reserved

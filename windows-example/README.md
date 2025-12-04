@@ -105,8 +105,6 @@ Device opened successfully.
 
 ### Keyboard HID Mode
 
-### Keyboard HID Mode
-
 When Generic HID device is not found, falls back to keyboard mode:
 
 ```
@@ -207,8 +205,6 @@ private static void HandleButtonPress(int buttonNumber)
     }
 }
 ```
-
-### Adding Custom Handlers (Keyboard HID Mode)
 
 ### Adding Custom Handlers (Keyboard HID Mode)
 
