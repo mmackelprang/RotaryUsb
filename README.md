@@ -8,7 +8,28 @@ This repository contains:
 
 - **[firmware/](firmware/)** - CircuitPython firmware (easy to customize, no build required)
 - **[firmware-cpp/](firmware-cpp/)** - C++ firmware (high-performance, requires Pico SDK)
-- **[windows-example/](windows-example/)** - C# example for capturing keyboard events on Windows
+- **[windows-example/](windows-example/)** - C# example for reading encoder data on Windows
+
+### Operating Modes
+
+RotaryUsb supports two HID modes:
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **Keyboard HID** | Sends F1-F12 key events | Quick setup, works with any app |
+| **Generic HID** | Sends raw encoder data | Custom applications, precise control |
+
+#### Keyboard HID Mode (Default)
+- Device appears as a standard USB keyboard
+- Encoder events trigger F1-F12 key presses  
+- Works immediately with any application that accepts keyboard input
+- Keys are sent globally (all applications receive them)
+
+#### Generic HID Mode (Advanced)
+- Device uses vendor-defined HID (Usage Page 0xFF00)
+- Applications read raw encoder position and button states directly
+- Events are exclusive to applications that open the device
+- Better for precise control and custom integrations
 
 ### Firmware Options
 
@@ -27,6 +48,11 @@ This repository contains:
 2. Copy [adafruit_hid library](https://circuitpython.org/libraries) to `CIRCUITPY/lib/`
 3. Copy `firmware/code.py` to the `CIRCUITPY` drive
 
+**For Generic HID Mode:**
+1. Also copy `firmware/boot.py` to the `CIRCUITPY` drive
+2. Power cycle the device (unplug and replug)
+3. Copy `firmware/code_generic_hid.py` as `code.py`
+
 #### Option B: C++ (High-Performance)
 
 1. Install [Pico SDK](https://github.com/raspberrypi/pico-sdk) and ARM GCC toolchain
@@ -38,6 +64,10 @@ This repository contains:
    make -j4
    ```
 3. Hold BOOTSEL, connect Pico via USB, copy `rotary_usb.uf2` to the `RPI-RP2` drive
+
+**For Generic HID Mode (C++):**
+1. Backup `main.cpp` and replace it with `main_generic_hid.cpp`
+2. Rebuild and flash
 
 ### Windows Example
 
@@ -491,6 +521,34 @@ You can later port to C/C++ with the Pico SDK if you want lower‑level control.
 
 - **HID not appearing**  
   - Ensure CircuitPython build has HID enabled and `usb_hid` is imported and not disabled in `boot.py`.
+
+---
+
+## GitHub Copilot Agent Prompt
+
+The following prompt can be used with GitHub Copilot to implement or extend RotaryUsb functionality:
+
+```
+Implement support for reading RotaryUsb rotary encoder input as a custom Generic HID device (not as a keyboard):
+
+1. **Firmware:**
+   - In `boot.py`, set the device to use a Vendor-Defined HID report descriptor for 4 encoders and buttons (suggest Usage Page 0xFF00, input report 4-8 bytes).
+   - In `code.py`, modify main loop to send encoder/button state with send_report() calls (not Keyboard.send()).
+   - Document the HID report bytes layout, and provide instructions for modifying report size if additional encoders/buttons are needed.
+
+2. **Windows C# Example:**
+   - Use the HidLibrary NuGet package to find the device by VID/PID and UsagePage and continuously read incoming HID reports.
+   - Parse bytes to extract each encoder/button state.
+   - Provide commented code in `windows-example/Program.cs` that supports live printing and optionally, application handling logic.
+   - Document how to build and run the sample, and how the encoder/button values map to bytes.
+
+3. **Documentation:**
+   - Update all firmware and example READMEs to explain both modes: HID Keyboard mode and Generic HID mode.
+   - Include detailed instructions for setting up, flashing, and coding against the Generic HID report.
+   - Give troubleshooting guidance for HID access on Windows and Linux.
+
+Include a section outlining the difference between Keyboard and Generic HID operation, and recommended use cases for each.
+```
 
 ---
 

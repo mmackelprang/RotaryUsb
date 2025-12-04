@@ -1,6 +1,25 @@
 # Raspberry Pi Pico Rotary Encoder Firmware (C++)
 
-This directory contains a high-performance C++ firmware for the Raspberry Pi Pico that reads 4 rotary encoders with push buttons and sends USB HID keyboard events.
+This directory contains a high-performance C++ firmware for the Raspberry Pi Pico that reads 4 rotary encoders with push buttons. Two modes are supported:
+
+| Mode | File | Description |
+|------|------|-------------|
+| **Keyboard HID** | `main.cpp` | Sends F1-F12 key events (default) |
+| **Generic HID** | `main_generic_hid.cpp` | Sends raw encoder data via vendor-defined HID |
+
+## Choosing a Mode
+
+### Keyboard HID Mode (Default)
+- Device appears as a standard USB keyboard
+- Encoder events trigger F1-F12 key presses
+- Works immediately with any application that accepts keyboard input
+- Build using the default `main.cpp`
+
+### Generic HID Mode
+- Device uses vendor-defined HID (Usage Page 0xFF00)
+- Applications can read raw encoder position and button states directly
+- Requires custom application code to read HID reports
+- To build: rename `main_generic_hid.cpp` to `main.cpp` (backup the original first)
 
 ## Why C++?
 
@@ -283,3 +302,55 @@ firmware-cpp/
 ## License
 
 Apache License 2.0
+
+## Generic HID Mode Details
+
+### Building Generic HID Firmware
+
+To build the Generic HID version instead of the Keyboard version:
+
+```bash
+# Backup the original main.cpp
+cd firmware-cpp
+cp main.cpp main_keyboard.cpp
+
+# Use the Generic HID version
+cp main_generic_hid.cpp main.cpp
+
+# Build as normal
+mkdir -p build && cd build
+cmake ..
+make -j4
+```
+
+### HID Report Format (Generic HID Mode)
+
+When using Generic HID mode, the device sends 8-byte reports:
+
+| Byte | Description | Range |
+|------|-------------|-------|
+| 0 | Report ID | Always 0x01 |
+| 1 | Encoder 1 movement | -127 to +127 (signed, positive = CW) |
+| 2 | Encoder 2 movement | -127 to +127 (signed, positive = CW) |
+| 3 | Encoder 3 movement | -127 to +127 (signed, positive = CW) |
+| 4 | Encoder 4 movement | -127 to +127 (signed, positive = CW) |
+| 5 | Button states | Bit 0-3: Buttons 1-4 (1 = pressed) |
+| 6 | Reserved | 0x00 |
+| 7 | Reserved | 0x00 |
+
+### USB Identifiers (Generic HID Mode)
+
+- **Vendor ID (VID):** 0xCAFE (development placeholder)
+- **Product ID (PID):** 0x4005
+- **Usage Page:** 0xFF00 (Vendor Defined)
+- **Usage:** 0x01
+
+### Reading Generic HID Reports
+
+To read the Generic HID reports from your application:
+
+1. **Windows:** Use HidLibrary, HidSharp, or Windows.Devices.HumanInterfaceDevice
+2. **Linux:** Use hidraw device or libhidapi
+3. **Cross-platform:** Use hidapi bindings for your language
+
+See the `windows-example/` directory for a C# example using HidLibrary.

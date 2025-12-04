@@ -1,6 +1,26 @@
 # Raspberry Pi Pico Rotary Encoder Firmware
 
-This directory contains CircuitPython firmware for reading 4 rotary encoders with push buttons and sending USB HID keyboard events.
+This directory contains CircuitPython firmware for reading 4 rotary encoders with push buttons. Two modes are supported:
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **Keyboard HID** | Sends F1-F12 key events | Quick setup, works with any app |
+| **Generic HID** | Sends raw encoder data via vendor-defined HID | Custom applications, precise control |
+
+## Choosing a Mode
+
+### Keyboard HID Mode (Default)
+- Device appears as a standard USB keyboard
+- Encoder events trigger F1-F12 key presses
+- Works immediately with any application that accepts keyboard input
+- Keys are sent globally (all apps receive them)
+
+### Generic HID Mode
+- Device uses vendor-defined HID (Usage Page 0xFF00)
+- Applications can read raw encoder position and button states directly
+- Requires custom application code to read HID reports
+- Events are only received by applications that specifically open the device
+- Better for precise control and custom integrations
 
 ## Hardware Setup
 
@@ -43,6 +63,8 @@ This directory contains CircuitPython firmware for reading 4 rotary encoders wit
 
 ### 3. Install Firmware
 
+#### Option A: Keyboard HID Mode (Default)
+
 Copy `code.py` from this directory to the root of the `CIRCUITPY` drive.
 
 ```
@@ -55,6 +77,25 @@ CIRCUITPY/
 │       └── ...
 └── code.py
 ```
+
+#### Option B: Generic HID Mode
+
+1. Copy `boot.py` from this directory to the root of the `CIRCUITPY` drive
+2. **Power cycle the device** (unplug and replug USB)
+3. Copy `code_generic_hid.py` as `code.py` to the `CIRCUITPY` drive
+
+```
+CIRCUITPY/
+├── lib/
+│   └── adafruit_hid/
+│       └── ...
+├── boot.py              # Required for Generic HID mode
+└── code.py              # Use code_generic_hid.py renamed to code.py
+```
+
+**Important:** The `boot.py` file configures the USB device type at startup. You must power cycle the device after adding or modifying `boot.py` for changes to take effect.
+
+To switch back to Keyboard mode, simply delete `boot.py` and use the original `code.py`.
 
 ### 4. Verify Operation
 
@@ -94,6 +135,40 @@ Set `DEBUG_ENABLED = False` in `code.py` to disable serial console output.
 ### Adjusting Debounce Timing
 
 Modify `BUTTON_DEBOUNCE_TIME` (default: 20ms) if buttons are too sensitive or unresponsive.
+
+## Generic HID Mode Details
+
+### HID Report Format
+
+When using Generic HID mode, the device sends 8-byte reports:
+
+| Byte | Description | Range |
+|------|-------------|-------|
+| 0 | Report ID | Always 0x01 |
+| 1 | Encoder 1 movement | -127 to +127 (signed, positive = CW) |
+| 2 | Encoder 2 movement | -127 to +127 (signed, positive = CW) |
+| 3 | Encoder 3 movement | -127 to +127 (signed, positive = CW) |
+| 4 | Encoder 4 movement | -127 to +127 (signed, positive = CW) |
+| 5 | Button states | Bit 0-3: Buttons 1-4 (1 = pressed) |
+| 6 | Reserved | 0x00 |
+| 7 | Reserved | 0x00 |
+
+### USB Identifiers
+
+- **Vendor ID (VID):** Depends on CircuitPython (typically 0x239A for Adafruit)
+- **Product ID (PID):** Depends on CircuitPython board
+- **Usage Page:** 0xFF00 (Vendor Defined)
+- **Usage:** 0x01
+
+### Reading Generic HID Reports
+
+To read the Generic HID reports from your application:
+
+1. **Windows:** Use HidLibrary, HidSharp, or similar libraries
+2. **Linux:** Use hidraw device or libhidapi
+3. **Cross-platform:** Use hidapi bindings for your language
+
+See the `windows-example/` directory for a C# example using HidLibrary.
 
 ## Troubleshooting
 
