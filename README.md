@@ -103,7 +103,7 @@ Notes:
 │  │   GP4  ◄──── Encoder 1 SW          GP13 ◄──── Encoder 4 SW         │    │
 │  │   GP5  ◄──── Encoder 2 CLK (A)                                      │    │
 │  │   GP6  ◄──── Encoder 2 DT  (B)     Internal Pull-ups: ENABLED      │    │
-│  │   GP7  ◄──── Encoder 2 SW          (47kΩ to 3.3V on each GPIO)     │    │
+│  │   GP7  ◄──── Encoder 2 SW          (~50-80kΩ to 3.3V on each GPIO) │    │
 │  │   GP8  ◄──── Encoder 3 CLK (A)                                      │    │
 │  │   GP9  ◄──── Encoder 3 DT  (B)                                      │    │
 │  │   GP10 ◄──── Encoder 3 SW                                           │    │
@@ -252,7 +252,7 @@ Despite being labeled as "5V" modules, KY-040 encoders work safely with the Pico
    ```
    With internal pull-ups (RECOMMENDED):
    
-   Pico GPIO ◄────┬──── 47kΩ ────► 3.3V (internal pull-up)
+   Pico GPIO ◄────┬──── ~50-80kΩ ────► 3.3V (internal pull-up)
                   │
                   └──── Encoder Switch ────► GND
    
@@ -314,7 +314,7 @@ External 5V PSU ────► VSYS (Pin 39) ────► Pico 3V3 Regulator
 External 3.3V Regulated PSU ────► 3V3 (Pin 36) ────► Pico & Encoders
                             │
                             └── Bypass internal regulator
-                                Use regulated 3.3V only (not 3V7!)
+                                Use regulated 3.3V only (not 3.7V!)
                                 Connect GND to Pico GND
 ```
 
