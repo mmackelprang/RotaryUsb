@@ -92,15 +92,17 @@ This project interfaces four rotary encoders, each with a push‑button shaft, t
 ## Hardware Components
 
 - Raspberry Pi Pico (or Pico W).
-- 4× rotary encoders with push‑button shafts (e.g., KY‑040 or similar 5‑pin modules).
+- 4× rotary encoders with push‑button shafts — either type works:
+  - **Bare encoders** (e.g., [Cylewet CYT1100](https://www.amazon.com/Cylewet-Encoder-Digital-Potentiometer-Arduino/dp/B07DM2YMT4) — 3+2 pin, no PCB)
+  - **Module encoders** (e.g., [Cylewet KY‑040 CYT1062](https://www.amazon.com/Cylewet-Encoder-15%C3%9716-5-Arduino-CYT1062/dp/B06XQTHDRR) — 5‑pin PCB with onboard pull‑ups)
 - Breadboard and jumper wires.
-- Optional: 10 kΩ resistors (external pull‑ups if desired, often not needed when using internal pull‑ups).
 - USB micro‑B cable to connect Pico to PC.
 
 Notes:
 
+- **No external pull‑up resistors are required** with either encoder type. The firmware enables the Pico’s internal pull‑ups (~50–80 kΩ) on all encoder GPIO pins.
 - Typical “5 V” KY‑040 modules are safe to use at 3.3 V with the Pico; they are just mechanical switches plus resistors.
-- You can omit the encoder “+” pin entirely if you rely on the Pico’s internal pull‑ups and treat the encoder as just switches to ground.
+- Bare encoders are also just mechanical switches to ground and work identically with the Pico’s internal pull‑ups — simply leave any “+” or VCC pin unconnected.
 
 ---
 
@@ -184,7 +186,7 @@ Notes:
             GP17 ───┤ 20                       21 ├─── GP16
                     └─────────────────────────────┘
 
-               ENCODER MODULE (KY-040 Style)
+               ENCODER TYPE A: KY-040 MODULE (5-pin PCB)
               ┌─────────────────────────────┐
               │         ┌───────┐           │
               │         │ENCODER│           │
@@ -196,7 +198,7 @@ Notes:
                   │     │    │   │    │
                   │     │    │   │    └──────► Pico GND (Pin 3, 8, 13, 18, 23, 28, 33, 38)
                   │     │    │   │
-                  │     │    │   └───────────► Pico 3V3 (Pin 36) OR leave NC*
+                  │     │    │   └───────────► NC (leave unconnected)*
                   │     │    │
                   │     │    └───────────────► Pico GPIO (SW pin)
                   │     │
@@ -204,10 +206,36 @@ Notes:
                   │
                   └──────────────────────────► Pico GPIO (CLK/A pin)
 
-              * NC = Not Connected (recommended when using internal pull-ups)
+              * NC = Not Connected (recommended — Pico internal pull-ups provide the HIGH reference)
+
+
+               ENCODER TYPE B: BARE ENCODER (3+2 pin, no PCB)
+
+                      ┌─────────┐
+                      │  KNOB   │
+                      │  SHAFT  │
+                 ┌────┴─────────┴────┐
+                 │   ROTARY ENCODER   │
+                 └─┬──────┬──────┬───┘
+                   │      │      │         3-pin side (rotary quadrature)
+                   │      │      │
+                   │      │      └─────────► Pico GPIO (B/DT pin)
+                   │      │
+                   │      └────────────────► Pico GND (center pin = common ground)
+                   │
+                   └───────────────────────► Pico GPIO (A/CLK pin)
+
+                 └───┬──────┬───┘
+                     │      │              2-pin side (push button)
+                     │      │
+                     │      └──────────────► Pico GND
+                     │
+                     └─────────────────────► Pico GPIO (SW pin)
 ```
 
-### Breadboard Wiring Example
+### Breadboard Wiring Examples
+
+#### Using KY‑040 Modules (5‑pin PCB)
 
 ```
  ENCODER 1        ENCODER 2        ENCODER 3        ENCODER 4
@@ -227,10 +255,40 @@ Notes:
   │ │ └──GP4       │ │ └──GP7       │ │ └──GP10      │ │ └──GP13
   │ └────GP3       │ └────GP6       │ └────GP9       │ └────GP12
   └──────GP2       └──────GP5       └──────GP8       └──────GP11
+```
 
+#### Using Bare Encoders (3+2 pin, no PCB)
+
+```
+ ENCODER 1            ENCODER 2            ENCODER 3            ENCODER 4
+ ┌─────────┐          ┌─────────┐          ┌─────────┐          ┌─────────┐
+ │  ┌───┐  │          │  ┌───┐  │          │  ┌───┐  │          │  ┌───┐  │
+ │  │ ○ │  │          │  │ ○ │  │          │  │ ○ │  │          │  │ ○ │  │
+ │  └───┘  │          │  └───┘  │          │  └───┘  │          │  └───┘  │
+ │A  GND  B│          │A  GND  B│          │A  GND  B│          │A  GND  B│
+ └┬───┬───┬┘          └┬───┬───┬┘          └┬───┬───┬┘          └┬───┬───┬┘
+  │   │   │            │   │   │            │   │   │            │   │   │
+  │   │   │            │   │   │            │   │   │            │   │   │
+  │   └───┼────────────┼───┴───┼────────────┼───┴───┼────────────┼───┴───┼──► GND Rail
+  │       │            │       │            │       │            │       │
+  │       └──GP3       │       └──GP6       │       └──GP9       │       └──GP12
+  └──────────GP2       └──────────GP5       └──────────GP8       └──────────GP11
+
+  (Push-button pins, 2-pin side of each encoder)
+  SW1  SW2            SW1  SW2            SW1  SW2            SW1  SW2
+  ┬─────┬              ┬─────┬              ┬─────┬              ┬─────┬
+  │     │              │     │              │     │              │     │
+  │     └──► GND Rail  │     └──► GND Rail  │     └──► GND Rail  │     └──► GND Rail
+  │                    │                    │                    │
+  └──GP4               └──GP7               └──GP10              └──GP13
+```
+
+#### Breadboard Layout (either encoder type)
+
+```
                         BREADBOARD LAYOUT
   ┌──────────────────────────────────────────────────────────────┐
-  │  ═══════════════════════════════════════════════════════════ │◄─ Power Rail (+)
+  │  ═══════════════════════════════════════════════════════════ │◄─ Power Rail (+) (unused)
   │  ═══════════════════════════════════════════════════════════ │◄─ GND Rail (-)
   │                                                              │
   │   [ENC1]    [ENC2]    [ENC3]    [ENC4]     [PICO]           │
@@ -252,6 +310,10 @@ Notes:
   │                                            │     │          │
   │  ═══════════════════════════════════════════════════════════ │◄─ Connect to Pico GND
   └──────────────────────────────────────────────────────────────┘
+
+  Note: For bare encoders, the center pin on the 3-pin side and one
+  push-button pin must also connect to the GND rail. For KY-040
+  modules, only the GND pin needs the GND rail (leave + unconnected).
 ```
 
 ### Voltage Levels and Level Shifting
@@ -268,24 +330,24 @@ Notes:
 | **Absolute Maximum** | **3.63V** | **Exceeding this WILL damage the Pico!** |
 | Internal Pull-up | ~50-80kΩ | Pulls GPIO to 3.3V when enabled |
 
-#### Why Level Shifting is NOT Required for KY-040 Encoders
+#### Why Level Shifting and External Pull‑Ups are NOT Required
 
-Despite being labeled as "5V" modules, KY-040 encoders work safely with the Pico because:
+Both KY‑040 modules and bare encoders work safely with the Pico without any external resistors because:
 
-1. **Open-Drain/Open-Collector Operation**: The encoder outputs (CLK, DT, SW) are mechanical switches that connect to GND when activated. They do not output voltage - they only pull the line LOW.
+1. **Open-Drain/Open-Collector Operation**: All rotary encoder outputs (CLK/A, DT/B, SW) are mechanical switches that connect to GND when activated. They do not output voltage — they only pull the line LOW. This is true for both bare encoders and module encoders.
 
-2. **Pull-up Resistor Location**: When using internal pull-ups (recommended), the Pico's 3.3V internal pull-ups define the HIGH voltage level. The encoder module's onboard pull-ups (typically 10kΩ to VCC) are either:
-   - Not connected (if you leave the `+` pin unconnected)
-   - Connected to 3.3V (if you wire `+` to Pico 3V3)
+2. **Pull-up Resistor Source**: The Pico's internal pull‑ups (~50–80 kΩ to 3.3 V) define the HIGH voltage level. No external pull‑ups are needed:
+   - **Bare encoders** have no onboard resistors at all — the Pico's internal pull‑ups are sufficient.
+   - **KY‑040 modules** have onboard 10 kΩ pull‑ups, but these are either not connected (if you leave the `+` pin unconnected) or safely connected to 3.3 V (if you wire `+` to Pico 3V3). Either way, the Pico's internal pull‑ups work in parallel.
 
-3. **Safe Signal Flow**:
+3. **Safe Signal Flow (both encoder types)**:
    ```
-   With internal pull-ups (RECOMMENDED):
-   
+   With Pico internal pull-ups (RECOMMENDED — no external resistors needed):
+
    Pico GPIO ◄────┬──── ~50-80kΩ ────► 3.3V (internal pull-up)
                   │
                   └──── Encoder Switch ────► GND
-   
+
    Switch OPEN:  GPIO reads HIGH (3.3V from internal pull-up)
    Switch CLOSED: GPIO reads LOW (connected to GND through switch)
    ```
@@ -359,6 +421,61 @@ External 3.3V Regulated PSU ────► 3V3 (Pin 36) ────► Pico & 
 
 ## Encoder Pinout And Pico Wiring
 
+### Compatible Encoder Types
+
+This project supports two common encoder form factors. Both are mechanical switches internally and work with the Pico's internal pull‑ups — **no external pull‑up resistors are needed**.
+
+#### Type A: KY‑040 Module (5‑pin PCB)
+
+A rotary encoder soldered onto a small breakout board with labeled pins and onboard 10 kΩ pull‑up resistors.
+
+Example: [Cylewet KY‑040 CYT1062 (5‑pack)](https://www.amazon.com/Cylewet-Encoder-15%C3%9716-5-Arduino-CYT1062/dp/B06XQTHDRR)
+
+```
+  KY-040 MODULE (top view)
+  ┌─────────────────────┐
+  │      ┌───────┐      │
+  │      │ENCODER│      │
+  │      │ KNOB  │      │
+  │      └───────┘      │
+  │  [R1]  [R2]  [R3]   │  ← Onboard 10kΩ pull-up resistors
+  │                      │
+  │ [CLK] [DT] [SW] [+] [GND]
+  └──┬─────┬────┬───┬────┬──┘
+     │     │    │   │    │
+     A     B   SW  VCC  GND
+```
+
+**Pins:** CLK (A), DT (B), SW (button), + (VCC), GND
+
+#### Type B: Bare Encoder (3+2 pin, no PCB)
+
+A standalone encoder component with no breakout board and no onboard resistors. Pins are split across two sides of the encoder body.
+
+Example: [Cylewet CYT1100 (5‑pack with knob caps)](https://www.amazon.com/Cylewet-Encoder-Digital-Potentiometer-Arduino/dp/B07DM2YMT4)
+
+```
+  BARE ENCODER (side view)
+
+       ┌─────────┐
+       │  KNOB   │
+       │  SHAFT  │
+  ┌────┴─────────┴────┐
+  │                    │
+  │   ROTARY ENCODER   │
+  │                    │
+  └─┬──────┬──────┬───┘
+    │      │      │        ← 3-pin side (rotary)
+    A    GND(C)   B
+
+  └───┬──────┬───┘
+      │      │             ← 2-pin side (push button)
+     SW1    SW2
+```
+
+**3‑pin side:** A (CLK), C (common/GND), B (DT)
+**2‑pin side:** SW1, SW2 (push button — normally open, either pin can be GND)
+
 ### Typical encoder pins
 
 For a common 5‑pin rotary encoder module (KY‑040‑style):
@@ -369,26 +486,43 @@ For a common 5‑pin rotary encoder module (KY‑040‑style):
 - + – Optional VCC (often labeled 5V but workable at 3.3 V).
 - GND – Ground.
 
-Internally, A/B/SW are just switches that connect to ground when activated; the microcontroller provides pull‑ups.
+For a bare encoder (3+2 pin):
+
+- A – Quadrature signal 1 (3‑pin side, outer pin).
+- C – Common/ground (3‑pin side, center pin).
+- B – Quadrature signal 2 (3‑pin side, outer pin).
+- SW1/SW2 – Push‑button terminals (2‑pin side, normally open).
+
+Internally, all encoder types are just switches that connect to ground when activated; the microcontroller provides pull‑ups.
 
 ### GPIO assignment
 
-Use 4 encoders × (A, B, SW) = 12 GPIO pins. All encoders share 3V3 and GND rails.
+Use 4 encoders × (A, B, SW) = 12 GPIO pins. All encoders share GND rails.
 
-| Encoder | A (CLK) | B (DT) | SW (Button) | VCC (+)      | GND       |
-|---------|---------|--------|-------------|--------------|-----------|
-| 1       | GP2     | GP3    | GP4         | Pico 3V3 or NC | Pico GND |
-| 2       | GP5     | GP6    | GP7         | Pico 3V3 or NC | Pico GND |
-| 3       | GP8     | GP9    | GP10        | Pico 3V3 or NC | Pico GND |
-| 4       | GP11    | GP12   | GP13        | Pico 3V3 or NC | Pico GND |
+#### Wiring: KY‑040 Module (5‑pin)
+
+| Encoder | CLK → | DT → | SW → | + (VCC) | GND → |
+|---------|-------|------|------|---------|-------|
+| 1       | GP2   | GP3  | GP4  | NC (leave unconnected) | Pico GND |
+| 2       | GP5   | GP6  | GP7  | NC (leave unconnected) | Pico GND |
+| 3       | GP8   | GP9  | GP10 | NC (leave unconnected) | Pico GND |
+| 4       | GP11  | GP12 | GP13 | NC (leave unconnected) | Pico GND |
+
+#### Wiring: Bare Encoder (3+2 pin)
+
+| Encoder | A → | B → | C (center) → | SW1 → | SW2 → |
+|---------|-----|-----|--------------|-------|-------|
+| 1       | GP2 | GP3 | Pico GND     | GP4   | Pico GND |
+| 2       | GP5 | GP6 | Pico GND     | GP7   | Pico GND |
+| 3       | GP8 | GP9 | Pico GND     | GP10  | Pico GND |
+| 4       | GP11| GP12| Pico GND     | GP13  | Pico GND |
 
 Wiring rules:
 
-- Connect all encoder GND pins to any Pico GND pins (tie grounds together on the breadboard).
-- Either:
-  - Connect all “+” pins to Pico 3V3, **or**
-  - Leave “+” unconnected and enable internal pull‑ups on A/B/SW lines in software (recommended and commonly used).
-- Each A/B/SW pin goes directly to its assigned Pico GPIO, no level shifting needed because the encoder only pulls to ground.
+- Connect all encoder GND/common pins to any Pico GND pins (tie grounds together on the breadboard).
+- For KY‑040 modules: leave the “+” pin unconnected (NC). The Pico's internal pull‑ups provide the HIGH reference.
+- For bare encoders: connect the center pin (C) to GND. Connect one push‑button pin to GPIO and the other to GND.
+- Each signal pin (A/B/SW) goes directly to its assigned Pico GPIO — no level shifting or external pull‑up resistors needed.
 
 Debounce and direction:
 
@@ -516,8 +650,9 @@ You can later port to C/C++ with the Pico SDK if you want lower‑level control.
 - **Noisy or bouncy encoders**  
   - Use proper software debounce and a quadrature state machine; consider using `rotaryio.Encoder` if supported in your CircuitPython version.
 
-- **Wrong wiring (5 V risk)**  
-  - Ensure encoder “+” is never tied to 5 V (VBUS) when wired to Pico GPIO; use 3.3 V or omit “+” entirely and use pull‑ups.
+- **Wrong wiring (5 V risk)**
+  - For KY‑040 modules: ensure encoder “+” is never tied to 5 V (VBUS); leave it unconnected (NC) or wire to 3.3 V only.
+  - For bare encoders: ensure signal pins (A, B, SW) connect only to Pico GPIO pins, and common/ground pins connect only to Pico GND.
 
 - **HID not appearing**  
   - Ensure CircuitPython build has HID enabled and `usb_hid` is imported and not disabled in `boot.py`.
