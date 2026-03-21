@@ -39,6 +39,16 @@ KEY_MAPPINGS = [
     {"cw_key": Keycode.F7, "ccw_key": Keycode.F8, "btn_key": Keycode.F12},  # Encoder 4
 ]
 
+# Encoder tuning
+# Number of quadrature state changes per physical detent.
+# KY-040 modules (full-cycle): 4
+# Many bare EC11 encoders (half-cycle): 2
+STEPS_PER_DETENT = 4
+
+# Set True to swap CW/CCW direction for all encoders.
+# Useful if your encoder's A/B pins are wired in reverse.
+REVERSE_DIRECTION = False
+
 # Debounce timing (in seconds)
 BUTTON_DEBOUNCE_TIME = 0.020  # 20ms debounce for buttons
 LOOP_DELAY = 0.001  # 1ms loop delay
@@ -110,16 +120,13 @@ class Encoder:
         self.pin_sw.pull = digitalio.Pull.UP
         
         # Encoder state tracking
-        # Read initial state (inverted because active-low)
         self.last_ab_state = self._read_ab_state()
-        # Accumulated steps - most encoders have 4 state changes per detent
-        # (adjust threshold in update() if your encoder behaves differently)
         self.steps = 0
-        
-        # Button state tracking
+
+        # Button state tracking (first-edge-latch debounce)
         self.last_button_state = self.pin_sw.value  # True = not pressed (pull-up)
         self.button_pressed = False
-        self.last_button_time = time.monotonic()
+        self.debounce_start = None  # Time of first edge, None when stable
     
     def _read_ab_state(self):
         """Read current A/B state as 2-bit value."""
@@ -136,52 +143,58 @@ class Encoder:
         Returns True if an event was sent.
         """
         event_sent = False
-        
+
         # Process encoder rotation
         current_ab_state = self._read_ab_state()
-        
+
         if current_ab_state != self.last_ab_state:
-            # Look up transition in table
             transition = (self.last_ab_state, current_ab_state)
             direction = self.TRANSITION_TABLE.get(transition, 0)
-            
+
             if direction != 0:
+                if REVERSE_DIRECTION:
+                    direction = -direction
                 self.steps += direction
-                
-                # Most encoders have 4 state changes per detent
-                # Send key event when a full detent is completed
-                if self.steps >= 4:
+
+                if self.steps >= STEPS_PER_DETENT:
                     self._send_key(self.cw_key, "CW")
                     self.steps = 0
                     event_sent = True
-                elif self.steps <= -4:
+                elif self.steps <= -STEPS_PER_DETENT:
                     self._send_key(self.ccw_key, "CCW")
                     self.steps = 0
                     event_sent = True
-            
+            else:
+                # Invalid transition (noise) — reset step accumulator
+                self.steps = 0
+
             self.last_ab_state = current_ab_state
-        
-        # Process button press with debounce
+
+        # Process button with first-edge-latch debounce
         current_button_state = self.pin_sw.value
         current_time = time.monotonic()
-        
-        # Button is active-low (pressed = False/low)
+
         if current_button_state != self.last_button_state:
-            if (current_time - self.last_button_time) >= BUTTON_DEBOUNCE_TIME:
-                self.last_button_time = current_time
+            if self.debounce_start is None:
+                # First edge detected — start debounce window
+                self.debounce_start = current_time
+            elif (current_time - self.debounce_start) >= BUTTON_DEBOUNCE_TIME:
+                # Debounce period elapsed — commit the new state
                 self.last_button_state = current_button_state
-                
-                # Detect falling edge (button press)
+                self.debounce_start = None
+
                 if not current_button_state and not self.button_pressed:
                     self.button_pressed = True
                     self._send_key(self.btn_key, "BTN")
                     event_sent = True
-                # Detect rising edge (button release)
                 elif current_button_state and self.button_pressed:
                     self.button_pressed = False
                     if DEBUG_ENABLED:
                         print(f"Encoder {self.encoder_id}: Button released")
-        
+        else:
+            # Signal is stable — clear any pending debounce
+            self.debounce_start = None
+
         return event_sent
     
     def _send_key(self, keycode, event_type):

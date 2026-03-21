@@ -16,7 +16,7 @@ class Encoder {
 public:
     /**
      * @brief Construct a new Encoder object
-     * 
+     *
      * @param pin_a GPIO pin for encoder A (CLK)
      * @param pin_b GPIO pin for encoder B (DT)
      * @param pin_sw GPIO pin for encoder push button (SW)
@@ -24,10 +24,13 @@ public:
      * @param keycode_ccw HID keycode to send on counter-clockwise rotation
      * @param keycode_btn HID keycode to send on button press
      * @param encoder_id Identifier for debug output
+     * @param steps_per_detent Quadrature state changes per physical detent (4 for KY-040, 2 for many bare EC11)
+     * @param reverse_direction Swap CW/CCW if A/B pins are wired in reverse
      */
     Encoder(uint8_t pin_a, uint8_t pin_b, uint8_t pin_sw,
             uint8_t keycode_cw, uint8_t keycode_ccw, uint8_t keycode_btn,
-            uint8_t encoder_id);
+            uint8_t encoder_id, int8_t steps_per_detent = 4,
+            bool reverse_direction = false);
 
     /**
      * @brief Initialize GPIO pins
@@ -60,11 +63,14 @@ private:
     // Encoder state
     uint8_t last_ab_state_;
     int8_t steps_;
+    int8_t steps_per_detent_;
+    bool reverse_direction_;
 
-    // Button state
+    // Button state (first-edge-latch debounce)
     bool last_button_state_;
     bool button_pressed_;
-    uint32_t last_button_time_;
+    uint32_t debounce_start_;   // Time of first edge (0 = no pending debounce)
+    bool debounce_active_;
 
     // Debug
     uint8_t encoder_id_;

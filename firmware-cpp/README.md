@@ -46,14 +46,30 @@ This C++ implementation offers several advantages over the CircuitPython version
 
 ## Hardware Setup
 
-Same wiring as the CircuitPython version:
+Same wiring as the CircuitPython version. Both encoder types are supported — **no external pull‑up resistors needed** (firmware enables Pico internal pull‑ups):
 
-| Encoder | A (CLK) | B (DT) | SW (Button) | VCC (+)   | GND |
-|---------|---------|--------|-------------|-----------|-----|
-| 1       | GP2     | GP3    | GP4         | 3V3 or NC | GND |
-| 2       | GP5     | GP6    | GP7         | 3V3 or NC | GND |
-| 3       | GP8     | GP9    | GP10        | 3V3 or NC | GND |
-| 4       | GP11    | GP12   | GP13        | 3V3 or NC | GND |
+- **[KY‑040 modules](https://www.amazon.com/Cylewet-Encoder-15%C3%9716-5-Arduino-CYT1062/dp/B06XQTHDRR)** (5‑pin PCB with onboard pull‑ups)
+- **[Bare encoders](https://www.amazon.com/Cylewet-Encoder-Digital-Potentiometer-Arduino/dp/B07DM2YMT4)** (3+2 pin, no PCB)
+
+#### KY‑040 Module (5‑pin PCB)
+
+| Encoder | CLK → | DT → | SW → | + (VCC) | GND → |
+|---------|-------|------|------|---------|-------|
+| 1       | GP2   | GP3  | GP4  | NC (leave unconnected) | Pico GND |
+| 2       | GP5   | GP6  | GP7  | NC (leave unconnected) | Pico GND |
+| 3       | GP8   | GP9  | GP10 | NC (leave unconnected) | Pico GND |
+| 4       | GP11  | GP12 | GP13 | NC (leave unconnected) | Pico GND |
+
+#### Bare Encoder (3+2 pin, no PCB)
+
+| Encoder | A (outer pin) → | C (center pin) → | B (outer pin) → | SW1 → | SW2 → |
+|---------|-----------------|------------------|-----------------|-------|-------|
+| 1       | GP2             | Pico GND         | GP3             | GP4   | Pico GND |
+| 2       | GP5             | Pico GND         | GP6             | GP7   | Pico GND |
+| 3       | GP8             | Pico GND         | GP9             | GP10  | Pico GND |
+| 4       | GP11            | Pico GND         | GP12            | GP13  | Pico GND |
+
+See the [CircuitPython firmware README](../firmware/README.md) for detailed wiring notes.
 
 ## Prerequisites
 

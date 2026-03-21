@@ -27,23 +27,39 @@ This directory contains CircuitPython firmware for reading 4 rotary encoders wit
 ### Required Components
 
 - Raspberry Pi Pico (or Pico W)
-- 4× rotary encoder modules (KY-040 style, 5-pin)
+- 4× rotary encoders with push‑button — either type:
+  - **[KY‑040 modules](https://www.amazon.com/Cylewet-Encoder-15%C3%9716-5-Arduino-CYT1062/dp/B06XQTHDRR)** (5‑pin PCB with onboard pull‑ups)
+  - **[Bare encoders](https://www.amazon.com/Cylewet-Encoder-Digital-Potentiometer-Arduino/dp/B07DM2YMT4)** (3+2 pin, no PCB)
 - Breadboard and jumper wires
 - USB micro-B cable
 
 ### Wiring Diagram
 
-| Encoder | A (CLK) | B (DT) | SW (Button) | VCC (+)        | GND       |
-|---------|---------|--------|-------------|----------------|-----------|
-| 1       | GP2     | GP3    | GP4         | 3V3 or NC      | GND       |
-| 2       | GP5     | GP6    | GP7         | 3V3 or NC      | GND       |
-| 3       | GP8     | GP9    | GP10        | 3V3 or NC      | GND       |
-| 4       | GP11    | GP12   | GP13        | 3V3 or NC      | GND       |
+**No external pull‑up resistors are needed** — the firmware enables Pico internal pull‑ups on all encoder pins.
+
+#### KY‑040 Module (5‑pin PCB)
+
+| Encoder | CLK → | DT → | SW → | + (VCC) | GND → |
+|---------|-------|------|------|---------|-------|
+| 1       | GP2   | GP3  | GP4  | NC (leave unconnected) | Pico GND |
+| 2       | GP5   | GP6  | GP7  | NC (leave unconnected) | Pico GND |
+| 3       | GP8   | GP9  | GP10 | NC (leave unconnected) | Pico GND |
+| 4       | GP11  | GP12 | GP13 | NC (leave unconnected) | Pico GND |
+
+#### Bare Encoder (3+2 pin, no PCB)
+
+| Encoder | A (outer pin) → | C (center pin) → | B (outer pin) → | SW1 → | SW2 → |
+|---------|-----------------|------------------|-----------------|-------|-------|
+| 1       | GP2             | Pico GND         | GP3             | GP4   | Pico GND |
+| 2       | GP5             | Pico GND         | GP6             | GP7   | Pico GND |
+| 3       | GP8             | Pico GND         | GP9             | GP10  | Pico GND |
+| 4       | GP11            | Pico GND         | GP12            | GP13  | Pico GND |
 
 **Notes:**
-- All encoder GND pins connect to Pico GND
-- VCC (+) can be connected to 3V3 or left unconnected (firmware uses internal pull-ups)
-- Do NOT connect VCC to 5V (VBUS) as this could damage GPIO pins
+- All encoder GND/common pins connect to Pico GND
+- For KY‑040 modules: leave the + (VCC) pin unconnected — Pico internal pull‑ups provide the HIGH reference
+- For bare encoders: the center pin on the 3‑pin side is common ground; one push‑button pin goes to GPIO, the other to GND
+- Do NOT connect any encoder pin to 5V (VBUS) as this could damage GPIO pins
 
 ## Installation
 

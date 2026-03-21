@@ -36,7 +36,8 @@ const int8_t Encoder::TRANSITION_TABLE[16] = {
 
 Encoder::Encoder(uint8_t pin_a, uint8_t pin_b, uint8_t pin_sw,
                  uint8_t keycode_cw, uint8_t keycode_ccw, uint8_t keycode_btn,
-                 uint8_t encoder_id)
+                 uint8_t encoder_id, int8_t steps_per_detent,
+                 bool reverse_direction)
     : pin_a_(pin_a)
     , pin_b_(pin_b)
     , pin_sw_(pin_sw)
@@ -45,9 +46,12 @@ Encoder::Encoder(uint8_t pin_a, uint8_t pin_b, uint8_t pin_sw,
     , keycode_btn_(keycode_btn)
     , last_ab_state_(0)
     , steps_(0)
+    , steps_per_detent_(steps_per_detent)
+    , reverse_direction_(reverse_direction)
     , last_button_state_(true)
     , button_pressed_(false)
-    , last_button_time_(0)
+    , debounce_start_(0)
+    , debounce_active_(false)
     , encoder_id_(encoder_id)
 {
 }
@@ -90,57 +94,61 @@ bool Encoder::update(uint8_t& keycode) {
     uint8_t current_ab_state = read_ab_state();
 
     if (current_ab_state != last_ab_state_) {
-        // Look up transition in table
         uint8_t index = (last_ab_state_ << 2) | current_ab_state;
         int8_t direction = TRANSITION_TABLE[index];
 
         if (direction != 0) {
+            if (reverse_direction_) direction = -direction;
             steps_ += direction;
 
-            // Most encoders have 4 state changes per detent
-            // (adjust this value if your encoder behaves differently)
-            // Send key event when a full detent is completed
-            if (steps_ >= 4) {
+            if (steps_ >= steps_per_detent_) {
                 keycode = keycode_cw_;
                 steps_ = 0;
                 DEBUG_PRINT("Encoder %d: CW -> Key 0x%02X\n", encoder_id_, keycode);
                 last_ab_state_ = current_ab_state;
                 return true;
-            } else if (steps_ <= -4) {
+            } else if (steps_ <= -steps_per_detent_) {
                 keycode = keycode_ccw_;
                 steps_ = 0;
                 DEBUG_PRINT("Encoder %d: CCW -> Key 0x%02X\n", encoder_id_, keycode);
                 last_ab_state_ = current_ab_state;
                 return true;
             }
+        } else {
+            // Invalid transition (noise) — reset step accumulator
+            steps_ = 0;
         }
 
         last_ab_state_ = current_ab_state;
     }
 
-    // Process button press with debounce
+    // Process button with first-edge-latch debounce
     bool current_button_state = gpio_get(pin_sw_);
     uint32_t current_time = time_us_32();
 
-    // Button is active-low (pressed = false/low)
     if (current_button_state != last_button_state_) {
-        if ((current_time - last_button_time_) >= BUTTON_DEBOUNCE_US) {
-            last_button_time_ = current_time;
+        if (!debounce_active_) {
+            // First edge — start debounce window
+            debounce_start_ = current_time;
+            debounce_active_ = true;
+        } else if ((current_time - debounce_start_) >= BUTTON_DEBOUNCE_US) {
+            // Debounce period elapsed — commit the new state
             last_button_state_ = current_button_state;
+            debounce_active_ = false;
 
-            // Detect falling edge (button press)
             if (!current_button_state && !button_pressed_) {
                 button_pressed_ = true;
                 keycode = keycode_btn_;
                 DEBUG_PRINT("Encoder %d: BTN -> Key 0x%02X\n", encoder_id_, keycode);
                 return true;
-            }
-            // Detect rising edge (button release)
-            else if (current_button_state && button_pressed_) {
+            } else if (current_button_state && button_pressed_) {
                 button_pressed_ = false;
                 DEBUG_PRINT("Encoder %d: Button released\n", encoder_id_);
             }
         }
+    } else {
+        // Signal is stable — clear any pending debounce
+        debounce_active_ = false;
     }
 
     return false;

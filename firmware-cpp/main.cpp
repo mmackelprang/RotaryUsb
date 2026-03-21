@@ -100,6 +100,15 @@ static const EncoderConfig ENCODER_CONFIGS[4] = {
 // Number of encoders
 constexpr size_t NUM_ENCODERS = 4;
 
+// Number of quadrature state changes per physical detent.
+// KY-040 modules (full-cycle): 4
+// Many bare EC11 encoders (half-cycle): 2
+static constexpr int8_t STEPS_PER_DETENT = 4;
+
+// Set true to swap CW/CCW direction for all encoders.
+// Useful if your encoder's A/B pins are wired in reverse.
+static constexpr bool REVERSE_DIRECTION = false;
+
 // Encoder instances (allocated in main)
 static Encoder* encoders[NUM_ENCODERS];
 
@@ -115,17 +124,38 @@ struct KeyboardReport {
 };
 
 static KeyboardReport keyboard_report;
-static bool key_pending = false;
-static uint8_t pending_keycode = 0;
+
+// Ring buffer for queued key events (prevents dropped keys during rapid rotation)
+static constexpr size_t KEY_QUEUE_SIZE = 8;
+static uint8_t key_queue[KEY_QUEUE_SIZE];
+static size_t key_queue_head = 0;  // Next write position
+static size_t key_queue_tail = 0;  // Next read position
+
+static bool key_queue_empty() {
+    return key_queue_head == key_queue_tail;
+}
+
+static bool key_queue_full() {
+    return ((key_queue_head + 1) % KEY_QUEUE_SIZE) == key_queue_tail;
+}
 
 /**
- * @brief Send a keyboard key press and release
+ * @brief Queue a keyboard key press for sending
  */
 static void send_key(uint8_t keycode) {
     if (keycode == 0) return;
-    
-    pending_keycode = keycode;
-    key_pending = true;
+    if (key_queue_full()) return;  // Queue full — drop incoming key
+
+    key_queue[key_queue_head] = keycode;
+    key_queue_head = (key_queue_head + 1) % KEY_QUEUE_SIZE;
+}
+
+static uint8_t key_queue_peek() {
+    return key_queue[key_queue_tail];
+}
+
+static void key_queue_pop() {
+    key_queue_tail = (key_queue_tail + 1) % KEY_QUEUE_SIZE;
 }
 
 // ============================================================================
@@ -267,21 +297,20 @@ static void hid_task() {
 
     switch (hid_state) {
         case HID_STATE_IDLE:
-            if (key_pending) {
-                // Send key press
+            if (!key_queue_empty()) {
+                // Send key press from front of queue
                 memset(&keyboard_report, 0, sizeof(keyboard_report));
-                keyboard_report.keycodes[0] = pending_keycode;
+                keyboard_report.keycodes[0] = key_queue_peek();
                 tud_hid_keyboard_report(0, 0, keyboard_report.keycodes);
                 hid_state = HID_STATE_KEY_DOWN;
             }
             break;
 
         case HID_STATE_KEY_DOWN:
-            // Send key release
+            // Send key release and consume from queue
             memset(&keyboard_report, 0, sizeof(keyboard_report));
             tud_hid_keyboard_report(0, 0, keyboard_report.keycodes);
-            key_pending = false;
-            pending_keycode = 0;
+            key_queue_pop();
             hid_state = HID_STATE_KEY_UP;
             break;
 
@@ -314,7 +343,7 @@ int main() {
         encoders[i] = new Encoder(
             cfg.pin_a, cfg.pin_b, cfg.pin_sw,
             cfg.key_cw, cfg.key_ccw, cfg.key_btn,
-            i + 1
+            i + 1, STEPS_PER_DETENT, REVERSE_DIRECTION
         );
         encoders[i]->init();
     }
