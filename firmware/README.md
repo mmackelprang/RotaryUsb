@@ -156,18 +156,17 @@ Modify `BUTTON_DEBOUNCE_TIME` (default: 20ms) if buttons are too sensitive or un
 
 ### HID Report Format
 
-When using Generic HID mode, the device sends 8-byte reports:
+When using Generic HID mode, the device sends 21-byte position reports (Input Report ID 0x01):
 
-| Byte | Description | Range |
-|------|-------------|-------|
-| 0 | Report ID | Always 0x01 |
-| 1 | Encoder 1 movement | -127 to +127 (signed, positive = CW) |
-| 2 | Encoder 2 movement | -127 to +127 (signed, positive = CW) |
-| 3 | Encoder 3 movement | -127 to +127 (signed, positive = CW) |
-| 4 | Encoder 4 movement | -127 to +127 (signed, positive = CW) |
-| 5 | Button states | Bit 0-3: Buttons 1-4 (1 = pressed) |
-| 6 | Reserved | 0x00 |
-| 7 | Reserved | 0x00 |
+| Offset | Type | Description |
+|--------|------|-------------|
+| 0-3 | int32 LE | Encoder 1 absolute position |
+| 4-7 | int32 LE | Encoder 2 absolute position |
+| 8-11 | int32 LE | Encoder 3 absolute position |
+| 12-15 | int32 LE | Encoder 4 absolute position |
+| 16 | uint8 | Button states (bit 0-3 = buttons 1-4) |
+| 17 | uint8 | Active acceleration tiers (packed 2-bit per encoder) |
+| 18-20 | uint8[3] | Reserved (0x00) |
 
 ### USB Identifiers
 
@@ -185,6 +184,42 @@ To read the Generic HID reports from your application:
 3. **Cross-platform:** Use hidapi bindings for your language
 
 See the `windows-example/` directory for a C# example using HidLibrary.
+
+### Runtime Configuration
+
+Generic HID mode now supports runtime configuration from the host application. Encoders track absolute positions (int32) instead of relative movement, with configurable bounds, step size, acceleration, and wrapping.
+
+#### New HID Report Protocol
+
+| Report | Direction | Size | Description |
+|--------|-----------|------|-------------|
+| Input ID 0x01 | Device → Host | 21 bytes | 4× int32 positions + buttons + acceleration tiers |
+| Input ID 0x02 | Device → Host | 106 bytes | Config readback (sent on command) |
+| Output ID 0x02 | Host → Device | 106 bytes | Full config write |
+| Output ID 0x03 | Host → Device | 2 bytes | Commands (save/reset/readback) |
+
+#### Per-Encoder Configuration
+
+Each encoder can be independently configured:
+- **min_value / max_value** (int32): Position bounds
+- **step_size** (int32): Base value change per detent
+- **wrap**: Wrap around at bounds vs clamp
+- **reverse**: Swap CW/CCW direction
+- **3 acceleration tiers**: Faster rotation applies larger step multipliers
+
+#### Flash Persistence
+
+Config is saved to `config.bin` on the CIRCUITPY filesystem. On boot, the device loads saved config or falls back to factory defaults (0-100 range, step=1).
+
+**Note:** `boot.py` calls `storage.remount("/", readonly=False)` which makes the CIRCUITPY drive read-only from the host PC. To edit files on the drive again, enter the REPL and run `storage.remount("/", readonly=True)`.
+
+#### Files
+
+| File | Purpose |
+|------|---------|
+| `boot.py` | HID descriptor with Input/Output Reports, storage setup |
+| `code_generic_hid.py` | Main firmware with position tracking and config handling |
+| `config.py` | Config data structures, validation, serialization (no CircuitPython deps) |
 
 ## Troubleshooting
 

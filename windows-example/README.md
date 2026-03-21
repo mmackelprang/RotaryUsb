@@ -68,39 +68,28 @@ When the device is in Generic HID mode:
 RotaryUsb Windows Example
 =========================
 
-This application supports two modes:
-  1. Generic HID Mode - Direct device access (recommended)
-  2. Keyboard HID Mode - Keyboard hook for F1-F12 keys
+Generic HID device found! Starting...
 
-Searching for Generic HID devices...
-Found 15 HID devices total.
-Found 1 vendor-defined HID devices.
-  - VID:0x239A PID:0x80F4 UsagePage:0xFF00 Usage:0x01
-  -> Potential RotaryUsb device found!
-Generic HID device found! Starting Generic HID mode...
+Reading config from device...
 
-Generic HID Mode
-================
+RotaryUsb Configuration
+========================
+Device connected: VID:0xCAFE PID:0x4005
 
-HID Report Format:
-  Byte 0: Report ID (0x01)
-  Byte 1-4: Encoder 1-4 movement (signed, +CW/-CCW)
-  Byte 5: Button states (bit 0-3 = buttons 1-4)
-  Byte 6-7: Reserved
+Current encoder values:
+  Enc1:          0  [0 - 100, step=1]
+  Enc2:          0  [0 - 100, step=1]
+  Enc3:          0  [0 - 100, step=1]
+  Enc4:          0  [0 - 100, step=1]
 
-Press Ctrl+C to exit.
+  Buttons: [ ] [ ] [ ] [ ]
 
-Waiting for HID reports...
-------------------------------------------------------------
-Device opened successfully.
-
-[14:30:15.123] Encoder 1: CW (+1) -> Position: 1
-  -> Action: Encoder 1 could control volume (up)
-[14:30:15.456] Encoder 1: CCW (-1) -> Position: 0
-  -> Action: Encoder 1 could control volume (down)
-[14:30:16.789] Button 1: PRESSED
-  -> Action: Button 1 could toggle mute
-[14:30:16.890] Button 1: RELEASED
+[M] Monitor - Live display of encoder values
+[C] Configure encoder
+[S] Save config to device flash
+[D] Reset to defaults
+[R] Reset positions
+[Q] Quit
 ```
 
 ### Keyboard HID Mode
@@ -149,18 +138,37 @@ Keyboard hook installed successfully.
 
 ## Generic HID Report Format
 
-When using Generic HID mode, the device sends 8-byte reports:
+When using Generic HID mode with runtime configuration, the device sends 21-byte position reports (Input Report ID 0x01):
 
-| Byte | Description | Range |
-|------|-------------|-------|
-| 0 | Report ID | Always 0x01 |
-| 1 | Encoder 1 movement | -127 to +127 (signed, positive = CW) |
-| 2 | Encoder 2 movement | -127 to +127 (signed, positive = CW) |
-| 3 | Encoder 3 movement | -127 to +127 (signed, positive = CW) |
-| 4 | Encoder 4 movement | -127 to +127 (signed, positive = CW) |
-| 5 | Button states | Bit 0-3: Buttons 1-4 (1 = pressed) |
-| 6 | Reserved | 0x00 |
-| 7 | Reserved | 0x00 |
+| Offset | Type | Description |
+|--------|------|-------------|
+| 0-3 | int32 LE | Encoder 1 absolute position |
+| 4-7 | int32 LE | Encoder 2 absolute position |
+| 8-11 | int32 LE | Encoder 3 absolute position |
+| 12-15 | int32 LE | Encoder 4 absolute position |
+| 16 | uint8 | Button states (bit 0-3 = buttons 1-4) |
+| 17 | uint8 | Active acceleration tiers (packed 2-bit per encoder) |
+| 18-20 | uint8[3] | Reserved (0x00) |
+
+## Runtime Configuration Menu
+
+In Generic HID mode, the application provides an interactive configuration menu:
+
+- **[M] Monitor** - Live display of encoder positions and acceleration tiers
+- **[C] Configure** - Edit per-encoder settings (min/max/step/wrap/reverse/acceleration)
+- **[S] Save** - Save current config to device flash
+- **[D] Defaults** - Reset device to factory defaults
+- **[R] Reset positions** - Reset all encoder positions to min_value
+- **[Q] Quit**
+
+### Built-in Presets
+
+| Preset | Min | Max | Step | Wrap | Accel Tiers |
+|--------|-----|-----|------|------|-------------|
+| General Purpose | 0 | 100 | 1 | No | 5x/15x/50x |
+| Radio Tuner (kHz) | 88,000 | 108,000 | 100 | Yes | 10x/100x/1000x |
+| Audio Mixer (%) | 0 | 100 | 1 | No | 2x/5x/10x |
+| Fine Control | 0 | 10,000 | 1 | No | 5x/25x/100x |
 
 ## USB Device Identification
 
@@ -172,39 +180,7 @@ If your device uses different identifiers, update the `KNOWN_VIDS` and `KNOWN_PI
 
 ## Customization
 
-### Adding Custom Handlers (Generic HID Mode)
-
-Edit the `HandleEncoderMovement` and `HandleButtonPress` methods in `Program.cs`:
-
-```csharp
-private static void HandleEncoderMovement(int encoderNumber, int movement, int position)
-{
-    switch (encoderNumber)
-    {
-        case 1:
-            // Your custom action for encoder 1
-            AdjustVolume(movement);
-            break;
-        case 2:
-            // Your custom action for encoder 2
-            AdjustBrightness(movement);
-            break;
-    }
-}
-
-private static void HandleButtonPress(int buttonNumber)
-{
-    switch (buttonNumber)
-    {
-        case 1:
-            ToggleMute();
-            break;
-        case 2:
-            ResetSettings();
-            break;
-    }
-}
-```
+The application uses an interactive menu for configuration. To add custom behavior when encoder values change, modify the `ReportReaderLoop` method in `Program.cs` where position reports are parsed.
 
 ### Adding Custom Handlers (Keyboard HID Mode)
 
