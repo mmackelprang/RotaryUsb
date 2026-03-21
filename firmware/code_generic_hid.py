@@ -43,6 +43,16 @@ ENCODER_PINS = [
     {"a": board.GP11, "b": board.GP12, "sw": board.GP13}, # Encoder 4
 ]
 
+# Encoder tuning
+# Number of quadrature state changes per physical detent.
+# KY-040 modules (full-cycle): 4
+# Many bare EC11 encoders (half-cycle): 2
+STEPS_PER_DETENT = 4
+
+# Set True to swap CW/CCW direction for all encoders.
+# Useful if your encoder's A/B pins are wired in reverse.
+REVERSE_DIRECTION = False
+
 # Debounce timing (in seconds)
 BUTTON_DEBOUNCE_TIME = 0.020  # 20ms debounce for buttons
 LOOP_DELAY = 0.001  # 1ms loop delay
@@ -109,11 +119,11 @@ class Encoder:
         self.last_ab_state = self._read_ab_state()
         self.steps = 0
         self.accumulated_movement = 0
-        
-        # Button state tracking
+
+        # Button state tracking (first-edge-latch debounce)
         self.last_button_state = self.pin_sw.value  # True = not pressed (pull-up)
         self.button_pressed = False
-        self.last_button_time = time.monotonic()
+        self.debounce_start = None  # Time of first edge, None when stable
     
     def _read_ab_state(self):
         """Read current A/B state as 2-bit value."""
@@ -133,51 +143,54 @@ class Encoder:
         """
         # Process encoder rotation
         current_ab_state = self._read_ab_state()
-        
+
         if current_ab_state != self.last_ab_state:
-            # Look up transition in table
             transition = (self.last_ab_state, current_ab_state)
             direction = self.TRANSITION_TABLE.get(transition, 0)
-            
+
             if direction != 0:
+                if REVERSE_DIRECTION:
+                    direction = -direction
                 self.steps += direction
-                
-                # Most encoders have 4 state changes per detent
-                # Accumulate movement when a full detent is completed
-                if self.steps >= 4:
+
+                if self.steps >= STEPS_PER_DETENT:
                     self.accumulated_movement += 1
                     self.steps = 0
                     if DEBUG_ENABLED:
                         print(f"Encoder {self.encoder_id}: CW detent")
-                elif self.steps <= -4:
+                elif self.steps <= -STEPS_PER_DETENT:
                     self.accumulated_movement -= 1
                     self.steps = 0
                     if DEBUG_ENABLED:
                         print(f"Encoder {self.encoder_id}: CCW detent")
-            
+            else:
+                # Invalid transition (noise) — reset step accumulator
+                self.steps = 0
+
             self.last_ab_state = current_ab_state
-        
-        # Process button press with debounce
+
+        # Process button with first-edge-latch debounce
         current_button_state = self.pin_sw.value
         current_time = time.monotonic()
-        
-        # Button is active-low (pressed = False/low)
+
         if current_button_state != self.last_button_state:
-            if (current_time - self.last_button_time) >= BUTTON_DEBOUNCE_TIME:
-                self.last_button_time = current_time
+            if self.debounce_start is None:
+                self.debounce_start = current_time
+            elif (current_time - self.debounce_start) >= BUTTON_DEBOUNCE_TIME:
                 self.last_button_state = current_button_state
-                
-                # Detect falling edge (button press)
+                self.debounce_start = None
+
                 if not current_button_state and not self.button_pressed:
                     self.button_pressed = True
                     if DEBUG_ENABLED:
                         print(f"Encoder {self.encoder_id}: Button pressed")
-                # Detect rising edge (button release)
                 elif current_button_state and self.button_pressed:
                     self.button_pressed = False
                     if DEBUG_ENABLED:
                         print(f"Encoder {self.encoder_id}: Button released")
-        
+        else:
+            self.debounce_start = None
+
         return self.button_pressed
     
     def get_and_clear_movement(self):

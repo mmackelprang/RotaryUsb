@@ -102,6 +102,15 @@ static const EncoderPinConfig ENCODER_PIN_CONFIGS[4] = {
 // Number of encoders
 constexpr size_t NUM_ENCODERS = 4;
 
+// Number of quadrature state changes per physical detent.
+// KY-040 modules (full-cycle): 4
+// Many bare EC11 encoders (half-cycle): 2
+static constexpr int8_t STEPS_PER_DETENT = 4;
+
+// Set true to swap CW/CCW direction for all encoders.
+// Useful if your encoder's A/B pins are wired in reverse.
+static constexpr bool REVERSE_DIRECTION = false;
+
 // ============================================================================
 // GENERIC HID ENCODER CLASS
 // ============================================================================
@@ -112,17 +121,22 @@ constexpr size_t NUM_ENCODERS = 4;
  */
 class GenericHidEncoder {
 public:
-    GenericHidEncoder(uint8_t pin_a, uint8_t pin_b, uint8_t pin_sw, uint8_t encoder_id)
+    GenericHidEncoder(uint8_t pin_a, uint8_t pin_b, uint8_t pin_sw,
+                      uint8_t encoder_id, int8_t steps_per_detent = 4,
+                      bool reverse_direction = false)
         : pin_a_(pin_a)
         , pin_b_(pin_b)
         , pin_sw_(pin_sw)
         , encoder_id_(encoder_id)
         , last_ab_state_(0)
         , steps_(0)
+        , steps_per_detent_(steps_per_detent)
+        , reverse_direction_(reverse_direction)
         , accumulated_movement_(0)
         , last_button_state_(true)
         , button_pressed_(false)
-        , last_button_time_(0)
+        , debounce_start_(0)
+        , debounce_active_(false)
     {}
 
     void init() {
@@ -162,31 +176,37 @@ public:
             int8_t direction = TRANSITION_TABLE[index];
 
             if (direction != 0) {
+                if (reverse_direction_) direction = -direction;
                 steps_ += direction;
 
-                // Most encoders have 4 state changes per detent
-                if (steps_ >= 4) {
+                if (steps_ >= steps_per_detent_) {
                     accumulated_movement_++;
                     steps_ = 0;
                     printf("Encoder %d: CW detent\n", encoder_id_);
-                } else if (steps_ <= -4) {
+                } else if (steps_ <= -steps_per_detent_) {
                     accumulated_movement_--;
                     steps_ = 0;
                     printf("Encoder %d: CCW detent\n", encoder_id_);
                 }
+            } else {
+                // Invalid transition (noise) — reset step accumulator
+                steps_ = 0;
             }
 
             last_ab_state_ = current_ab_state;
         }
 
-        // Process button press with debounce
+        // Process button with first-edge-latch debounce
         bool current_button_state = gpio_get(pin_sw_);
         uint32_t current_time = time_us_32();
 
         if (current_button_state != last_button_state_) {
-            if ((current_time - last_button_time_) >= BUTTON_DEBOUNCE_US) {
-                last_button_time_ = current_time;
+            if (!debounce_active_) {
+                debounce_start_ = current_time;
+                debounce_active_ = true;
+            } else if ((current_time - debounce_start_) >= BUTTON_DEBOUNCE_US) {
                 last_button_state_ = current_button_state;
+                debounce_active_ = false;
 
                 if (!current_button_state && !button_pressed_) {
                     button_pressed_ = true;
@@ -196,6 +216,8 @@ public:
                     printf("Encoder %d: Button released\n", encoder_id_);
                 }
             }
+        } else {
+            debounce_active_ = false;
         }
 
         return button_pressed_;
@@ -229,12 +251,15 @@ private:
     // Encoder state
     uint8_t last_ab_state_;
     int8_t steps_;
+    int8_t steps_per_detent_;
+    bool reverse_direction_;
     int16_t accumulated_movement_;
 
-    // Button state
+    // Button state (first-edge-latch debounce)
     bool last_button_state_;
     bool button_pressed_;
-    uint32_t last_button_time_;
+    uint32_t debounce_start_;
+    bool debounce_active_;
 
     // Constants
     static constexpr uint32_t BUTTON_DEBOUNCE_US = 20000;  // 20ms
@@ -404,8 +429,29 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
 // HID TASK
 // ============================================================================
 
+// Cache button states from fast encoder polling for use by rate-limited HID reports
+static uint8_t cached_button_states = 0;
+
+/**
+ * @brief Poll all encoders at full speed (called from main loop).
+ * Encoder rotation and button state are tracked internally;
+ * hid_task() collects accumulated movement at report intervals.
+ */
+static void encoder_poll_task() {
+    uint8_t button_states = 0;
+    for (size_t i = 0; i < NUM_ENCODERS; i++) {
+        if (encoders[i]->update()) {
+            button_states |= (1 << i);
+        }
+    }
+    cached_button_states = button_states;
+}
+
+/**
+ * @brief Send HID reports at a rate-limited interval.
+ * Encoder polling happens separately in encoder_poll_task().
+ */
 static void hid_task() {
-    // Report interval (ms)
     const uint32_t interval_ms = 10;
     static uint32_t start_ms = 0;
 
@@ -414,20 +460,11 @@ static void hid_task() {
 
     if (!tud_hid_ready()) return;
 
-    // Build report
-    uint8_t button_states = 0;
-    for (size_t i = 0; i < NUM_ENCODERS; i++) {
-        bool btn_pressed = encoders[i]->update();
-        if (btn_pressed) {
-            button_states |= (1 << i);
-        }
-    }
-
-    // Get encoder movements
+    // Collect accumulated movement from encoders
     for (size_t i = 0; i < NUM_ENCODERS; i++) {
         current_report.encoder_movement[i] = encoders[i]->get_and_clear_movement();
     }
-    current_report.button_states = button_states;
+    current_report.button_states = cached_button_states;
     current_report.reserved[0] = 0;
     current_report.reserved[1] = 0;
 
@@ -443,9 +480,8 @@ static void hid_task() {
     bool has_change = memcmp(&current_report, &last_report, sizeof(GenericHidReport)) != 0;
 
     if (has_movement || has_change) {
-        // Send report with Report ID 1
         tud_hid_report(1, &current_report, sizeof(GenericHidReport));
-        
+
         if (has_movement) {
             printf("Report: Enc[%d,%d,%d,%d] Btn=0x%02X\n",
                    current_report.encoder_movement[0],
@@ -482,7 +518,7 @@ int main() {
         const auto& cfg = ENCODER_PIN_CONFIGS[i];
         encoders[i] = new GenericHidEncoder(
             cfg.pin_a, cfg.pin_b, cfg.pin_sw,
-            i + 1
+            i + 1, STEPS_PER_DETENT, REVERSE_DIRECTION
         );
         encoders[i]->init();
     }
@@ -499,7 +535,10 @@ int main() {
         // Process USB tasks
         tud_task();
 
-        // Process HID reports
+        // Poll encoders at full speed (not rate-limited)
+        encoder_poll_task();
+
+        // Send HID reports at rate-limited intervals
         hid_task();
     }
 
