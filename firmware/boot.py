@@ -44,10 +44,12 @@ GENERIC_HID_REPORT_DESCRIPTOR = bytes([
     # ---- Input Report ID 0x01: Encoder Positions (21 bytes) ----
     0x85, 0x01,        #   Report ID (1)
 
-    # 4 encoder positions as 32-bit signed values (16 bytes)
+    # 4 encoder positions as 32-bit signed values (16 raw bytes)
+    # Logical min/max are nominal; actual int32 values are parsed by the host app
+    # from the raw vendor-defined bytes, not by the HID driver.
     0x09, 0x02,        #   Usage (Vendor Usage 2 - Encoder Positions)
-    0x16, 0x00, 0x80,  #   Logical Minimum (-32768) — placeholder for vendor data
-    0x26, 0xFF, 0x7F,  #   Logical Maximum (32767) — placeholder for vendor data
+    0x15, 0x00,        #   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  #   Logical Maximum (255)
     0x75, 0x08,        #   Report Size (8 bits)
     0x95, 0x10,        #   Report Count (16 bytes = 4x int32)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)

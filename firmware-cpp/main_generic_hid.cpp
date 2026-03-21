@@ -117,6 +117,7 @@ static bool validate_encoder_config(const EncoderConfig& enc) {
 
     for (size_t i = 0; i < NUM_TIERS; i++) {
         if (enc.tiers[i].threshold_ms > 0) {
+            if (enc.tiers[i].multiplier == 0) return false;
             if (has_prev) {
                 if (enc.tiers[i].threshold_ms >= prev_threshold) return false;
                 if (enc.tiers[i].multiplier <= prev_multiplier) return false;
@@ -259,10 +260,12 @@ static const uint8_t hid_report_descriptor[] = {
     // ---- Input Report ID 0x01: Encoder Positions (21 bytes) ----
     0x85, 0x01,        //   Report ID (1)
 
-    // 4 encoder positions as 32-bit values (16 bytes)
+    // 4 encoder positions as 32-bit values (16 raw bytes)
+    // Logical min/max are nominal; actual int32 values are parsed by the host
+    // app from the raw vendor-defined bytes, not by the HID driver.
     0x09, 0x02,        //   Usage (Vendor Usage 2 - Encoder Positions)
-    0x16, 0x00, 0x80,  //   Logical Minimum (-32768)
-    0x26, 0xFF, 0x7F,  //   Logical Maximum (32767)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  //   Logical Maximum (255)
     0x75, 0x08,        //   Report Size (8 bits)
     0x95, 0x10,        //   Report Count (16 bytes = 4x int32)
     0x81, 0x02,        //   Input (Data, Variable, Absolute)
@@ -481,7 +484,7 @@ private:
     uint8_t encoder_id_;
 
     uint8_t last_ab_state_;
-    int8_t steps_;
+    int16_t steps_;  // int16 to prevent overflow under rapid bounce noise
 
     // Absolute position tracking
     int32_t position_;
@@ -516,6 +519,7 @@ static GenericHidEncoder* encoders[NUM_ENCODERS];
 static PositionReport current_report;
 static PositionReport last_report;
 static bool pending_config_readback = false;
+static bool pending_save = false;
 
 // ============================================================================
 // TINYUSB DESCRIPTORS AND CALLBACKS
@@ -627,7 +631,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
         // Command
         uint8_t command = buffer[0];
         if (command == CMD_SAVE_CONFIG) {
-            save_config_to_flash();
+            pending_save = true;  // Defer to main loop — flash write requires non-interrupt context
         } else if (command == CMD_RESET_DEFAULTS) {
             device_config = factory_default_config();
             int8_t spd = (device_config.global_flags & 0x01) ? 2 : 4;
@@ -747,6 +751,13 @@ int main() {
 
     while (true) {
         tud_task();
+
+        // Deferred flash write — must run outside USB interrupt context
+        if (pending_save) {
+            pending_save = false;
+            save_config_to_flash();
+        }
+
         encoder_poll_task();
         hid_task();
     }

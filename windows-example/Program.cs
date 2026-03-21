@@ -320,9 +320,9 @@ public class Program
                                 $"UsagePage:0x{caps.UsagePage:X4} Usage:0x{caps.Usage:X2}");
 
                 bool vidMatch = KNOWN_VIDS.Contains(attrs.VendorId);
-                bool isVendorPage = caps.UsagePage == VENDOR_USAGE_PAGE;
+                bool pidMatch = KNOWN_PIDS.Contains(attrs.ProductId);
 
-                if (isVendorPage && (vidMatch || attrs.VendorId != 0))
+                if (vidMatch && pidMatch)
                 {
                     Console.WriteLine($"  -> RotaryUsb device found!");
                     return device;
@@ -682,6 +682,12 @@ public class Program
                     EditTier(working.Tiers[2], "Tier 3");
                     break;
                 case 'A':
+                    var validationError = ValidateEncoderConfig(working);
+                    if (validationError != null)
+                    {
+                        Console.WriteLine($"  Validation error: {validationError}");
+                        break;
+                    }
                     lock (_lock)
                     {
                         _deviceConfig.Encoders[encIdx] = working;
@@ -712,6 +718,38 @@ public class Program
         if (int.TryParse(input, out int value)) return value;
         Console.WriteLine("  Invalid number, keeping current value.");
         return current;
+    }
+
+    private static string? ValidateEncoderConfig(EncoderConfig enc)
+    {
+        if (enc.MinValue >= enc.MaxValue)
+            return $"min ({enc.MinValue}) must be less than max ({enc.MaxValue})";
+        if (enc.StepSize <= 0)
+            return $"step size ({enc.StepSize}) must be positive";
+
+        // Check enabled tiers
+        ushort prevThreshold = 0;
+        ushort prevMultiplier = 0;
+        bool hasPrev = false;
+        for (int i = 0; i < NUM_TIERS; i++)
+        {
+            if (enc.Tiers[i].ThresholdMs > 0)
+            {
+                if (enc.Tiers[i].Multiplier == 0)
+                    return $"tier {i + 1} has threshold but multiplier is 0";
+                if (hasPrev)
+                {
+                    if (enc.Tiers[i].ThresholdMs >= prevThreshold)
+                        return $"tier {i + 1} threshold must be less than previous enabled tier";
+                    if (enc.Tiers[i].Multiplier <= prevMultiplier)
+                        return $"tier {i + 1} multiplier must be greater than previous enabled tier";
+                }
+                prevThreshold = enc.Tiers[i].ThresholdMs;
+                prevMultiplier = enc.Tiers[i].Multiplier;
+                hasPrev = true;
+            }
+        }
+        return null;
     }
 
     private static void EditTier(TierConfig tier, string name)

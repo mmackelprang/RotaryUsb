@@ -113,6 +113,20 @@ def test_disabled_middle_tier_valid():
     assert validate_encoder_config(enc)
 
 
+def test_invalid_enabled_tier_zero_multiplier():
+    """Enabled tier with multiplier=0 should be invalid (would freeze encoder)."""
+    enc = factory_default_encoder()
+    enc.tiers[0] = TierConfig(150, 0)  # enabled threshold, but zero multiplier
+    assert not validate_encoder_config(enc)
+
+
+def test_invalid_enabled_tier_zero_multiplier_middle():
+    """Middle tier enabled with multiplier=0 should be invalid."""
+    enc = factory_default_encoder()
+    enc.tiers[1] = TierConfig(80, 0)
+    assert not validate_encoder_config(enc)
+
+
 def test_disabled_middle_tier_invalid_threshold():
     """Tier 2 disabled, but tier3 threshold > tier1 threshold — invalid."""
     enc = factory_default_encoder()

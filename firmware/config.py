@@ -141,9 +141,13 @@ def validate_encoder_config(enc):
     if enc.step_size <= 0:
         return False
 
-    # Collect enabled tiers
-    enabled = [(i, enc.tiers[i]) for i in range(NUM_TIERS)
-               if enc.tiers[i].threshold_ms > 0]
+    # Collect enabled tiers and check each has a non-zero multiplier
+    enabled = []
+    for i in range(NUM_TIERS):
+        if enc.tiers[i].threshold_ms > 0:
+            if enc.tiers[i].multiplier == 0:
+                return False
+            enabled.append((i, enc.tiers[i]))
 
     # Check enabled tier thresholds are strictly descending
     # and multipliers are strictly ascending

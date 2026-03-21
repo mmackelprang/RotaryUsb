@@ -302,6 +302,7 @@ def main():
     last_report_time = time.monotonic()
     last_report = bytearray(21)
     pending_config_readback = False
+    readback_retry_time = 0  # Rate-limit readback retries
 
     # Main loop
     while True:
@@ -353,8 +354,9 @@ def main():
             elif command == CMD_READ_CONFIG:
                 pending_config_readback = True
 
-        # Send config readback if requested
-        if pending_config_readback:
+        # Send config readback if requested (rate-limited retries)
+        current_time = time.monotonic()
+        if pending_config_readback and current_time >= readback_retry_time:
             try:
                 config_data = device_config.pack()
                 hid_device.send_report(config_data, 2)  # Report ID 2
@@ -362,10 +364,9 @@ def main():
                 if DEBUG_ENABLED:
                     print("Config readback sent")
             except Exception as e:
+                readback_retry_time = current_time + 0.1  # Retry after 100ms
                 if DEBUG_ENABLED:
                     print(f"Config readback error: {e}")
-
-        current_time = time.monotonic()
 
         # Send position report at regular intervals
         if (current_time - last_report_time) >= REPORT_INTERVAL:
