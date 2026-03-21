@@ -21,6 +21,7 @@ target_link_libraries(rotary_usb
     pico_stdlib
     tinyusb_device
     tinyusb_board
+    hardware_flash
 )
 
 # Enable USB output, disable UART output
