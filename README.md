@@ -30,6 +30,7 @@ RotaryUsb supports two HID modes:
 - Applications read raw encoder position and button states directly
 - Events are exclusive to applications that open the device
 - Better for precise control and custom integrations
+- **Runtime configurable:** Encoder bounds, step size, acceleration, and wrapping can be configured at runtime from the Windows app and saved to device flash
 
 ### Firmware Options
 

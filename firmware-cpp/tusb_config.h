@@ -61,7 +61,7 @@ extern "C" {
 #define CFG_TUD_VENDOR          0
 
 // HID buffer size
-#define CFG_TUD_HID_EP_BUFSIZE    16
+#define CFG_TUD_HID_EP_BUFSIZE    128
 
 #ifdef __cplusplus
 }

@@ -341,18 +341,17 @@ make -j4
 
 ### HID Report Format (Generic HID Mode)
 
-When using Generic HID mode, the device sends 8-byte reports:
+When using Generic HID mode, the device sends 21-byte position reports (Input Report ID 0x01):
 
-| Byte | Description | Range |
-|------|-------------|-------|
-| 0 | Report ID | Always 0x01 |
-| 1 | Encoder 1 movement | -127 to +127 (signed, positive = CW) |
-| 2 | Encoder 2 movement | -127 to +127 (signed, positive = CW) |
-| 3 | Encoder 3 movement | -127 to +127 (signed, positive = CW) |
-| 4 | Encoder 4 movement | -127 to +127 (signed, positive = CW) |
-| 5 | Button states | Bit 0-3: Buttons 1-4 (1 = pressed) |
-| 6 | Reserved | 0x00 |
-| 7 | Reserved | 0x00 |
+| Offset | Type | Description |
+|--------|------|-------------|
+| 0-3 | int32 LE | Encoder 1 absolute position |
+| 4-7 | int32 LE | Encoder 2 absolute position |
+| 8-11 | int32 LE | Encoder 3 absolute position |
+| 12-15 | int32 LE | Encoder 4 absolute position |
+| 16 | uint8 | Button states (bit 0-3 = buttons 1-4) |
+| 17 | uint8 | Active acceleration tiers (packed 2-bit per encoder) |
+| 18-20 | uint8[3] | Reserved (0x00) |
 
 ### USB Identifiers (Generic HID Mode)
 
@@ -370,3 +369,22 @@ To read the Generic HID reports from your application:
 3. **Cross-platform:** Use hidapi bindings for your language
 
 See the `windows-example/` directory for a C# example using HidLibrary.
+
+### Runtime Configuration
+
+Generic HID mode supports runtime configuration from the host application. The device uses Output Reports for host-to-device communication:
+
+| Report | Direction | Size | Description |
+|--------|-----------|------|-------------|
+| Input ID 0x01 | Device → Host | 21 bytes | Absolute positions + buttons + tiers |
+| Input ID 0x02 | Device → Host | 106 bytes | Config readback |
+| Output ID 0x02 | Host → Device | 106 bytes | Full config write |
+| Output ID 0x03 | Host → Device | 2 bytes | Commands |
+
+#### Flash Persistence
+
+Config is stored in the last flash sector (4096 bytes) with a magic number (`0x52554342`), 106-byte config payload, and CRC16-CCITT checksum. The `hardware_flash` library is used for flash read/write.
+
+#### Build Dependencies
+
+The runtime config feature adds `hardware_flash` to the link dependencies in `CMakeLists.txt` and increases `CFG_TUD_HID_EP_BUFSIZE` from 16 to 128 bytes in `tusb_config.h`.

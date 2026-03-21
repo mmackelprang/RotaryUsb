@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -10,41 +11,208 @@ using HidLibrary;
 namespace RotaryUsbExample;
 
 /// <summary>
-/// Example Windows console application demonstrating two methods to read
-/// RotaryUsb device data:
-/// 
-/// 1. GENERIC HID MODE (Recommended): Direct HID access using HidLibrary
-///    - Requires firmware in Generic HID mode (boot.py + code_generic_hid.py)
-///    - Reads raw encoder/button data directly
-///    - Events only go to your application
-/// 
-/// 2. KEYBOARD HID MODE: Low-level keyboard hook
-///    - Works with default firmware (code.py only)
-///    - Intercepts F1-F12 key events
-///    - Keys are sent to all applications
+/// Windows console application for RotaryUsb device with runtime configuration.
+///
+/// Supports two modes:
+/// 1. GENERIC HID MODE (Recommended): Direct HID access with config menu
+/// 2. KEYBOARD HID MODE: Low-level keyboard hook for F1-F12 keys
 /// </summary>
 public class Program
 {
     // ========================================================================
     // GENERIC HID CONFIGURATION
     // ========================================================================
-    
-    // CircuitPython devices typically use Adafruit VID
-    // Check Device Manager or use the enumeration to find your actual VID/PID
-    private static readonly int[] KNOWN_VIDS = { 0x239A, 0xCAFE };  // Adafruit, Development
-    private static readonly int[] KNOWN_PIDS = { 0x80F4, 0x4005 }; // CircuitPython, C++ Generic HID
-    
-    // Vendor-defined Usage Page for Generic HID mode
-    // Note: HidLibrary returns UsagePage as short, so 0xFF00 becomes -256 when signed
+
+    private static readonly int[] KNOWN_VIDS = { 0x239A, 0xCAFE };
+    private static readonly int[] KNOWN_PIDS = { 0x80F4, 0x4005 };
     private const short VENDOR_USAGE_PAGE = unchecked((short)0xFF00);
-    
+
+    // Config constants
+    private const byte CONFIG_VERSION = 0x01;
+    private const int FULL_CONFIG_SIZE = 106;
+    private const int NUM_ENCODERS = 4;
+    private const int NUM_TIERS = 3;
+
+    // Report IDs
+    private const byte REPORT_ID_POSITIONS = 0x01;
+    private const byte REPORT_ID_CONFIG = 0x02;
+    private const byte REPORT_ID_COMMAND = 0x03;
+
+    // Commands
+    private const byte CMD_SAVE_CONFIG = 0x01;
+    private const byte CMD_RESET_DEFAULTS = 0x02;
+    private const byte CMD_RESET_POSITIONS = 0x03;
+    private const byte CMD_READ_CONFIG = 0x04;
+
+    // ========================================================================
+    // CONFIG DATA STRUCTURES
+    // ========================================================================
+
+    private class TierConfig
+    {
+        public ushort ThresholdMs;
+        public ushort Multiplier;
+    }
+
+    private class EncoderConfig
+    {
+        public int MinValue;
+        public int MaxValue;
+        public int StepSize;
+        public bool Wrap;
+        public bool Reverse;
+        public TierConfig[] Tiers = new TierConfig[NUM_TIERS];
+
+        public EncoderConfig()
+        {
+            for (int i = 0; i < NUM_TIERS; i++)
+                Tiers[i] = new TierConfig();
+        }
+
+        public EncoderConfig Clone()
+        {
+            var c = new EncoderConfig
+            {
+                MinValue = MinValue,
+                MaxValue = MaxValue,
+                StepSize = StepSize,
+                Wrap = Wrap,
+                Reverse = Reverse
+            };
+            for (int i = 0; i < NUM_TIERS; i++)
+            {
+                c.Tiers[i] = new TierConfig
+                {
+                    ThresholdMs = Tiers[i].ThresholdMs,
+                    Multiplier = Tiers[i].Multiplier
+                };
+            }
+            return c;
+        }
+    }
+
+    private class DeviceConfig
+    {
+        public byte Version = CONFIG_VERSION;
+        public byte GlobalFlags;
+        public EncoderConfig[] Encoders = new EncoderConfig[NUM_ENCODERS];
+
+        public DeviceConfig()
+        {
+            for (int i = 0; i < NUM_ENCODERS; i++)
+                Encoders[i] = new EncoderConfig();
+        }
+
+        public byte[] Serialize()
+        {
+            var data = new byte[FULL_CONFIG_SIZE];
+            data[0] = Version;
+            data[1] = GlobalFlags;
+            int offset = 2;
+            for (int e = 0; e < NUM_ENCODERS; e++)
+            {
+                var enc = Encoders[e];
+                BitConverter.GetBytes(enc.MinValue).CopyTo(data, offset);
+                BitConverter.GetBytes(enc.MaxValue).CopyTo(data, offset + 4);
+                BitConverter.GetBytes(enc.StepSize).CopyTo(data, offset + 8);
+                data[offset + 12] = (byte)(enc.Wrap ? 1 : 0);
+                data[offset + 13] = (byte)(enc.Reverse ? 1 : 0);
+                for (int t = 0; t < NUM_TIERS; t++)
+                {
+                    BitConverter.GetBytes(enc.Tiers[t].ThresholdMs).CopyTo(data, offset + 14 + t * 4);
+                    BitConverter.GetBytes(enc.Tiers[t].Multiplier).CopyTo(data, offset + 16 + t * 4);
+                }
+                offset += 26;
+            }
+            return data;
+        }
+
+        public static DeviceConfig? Deserialize(byte[] data)
+        {
+            if (data.Length < FULL_CONFIG_SIZE) return null;
+            if (data[0] != CONFIG_VERSION) return null;
+
+            var cfg = new DeviceConfig
+            {
+                Version = data[0],
+                GlobalFlags = data[1]
+            };
+            int offset = 2;
+            for (int e = 0; e < NUM_ENCODERS; e++)
+            {
+                var enc = new EncoderConfig
+                {
+                    MinValue = BitConverter.ToInt32(data, offset),
+                    MaxValue = BitConverter.ToInt32(data, offset + 4),
+                    StepSize = BitConverter.ToInt32(data, offset + 8),
+                    Wrap = data[offset + 12] != 0,
+                    Reverse = data[offset + 13] != 0
+                };
+                for (int t = 0; t < NUM_TIERS; t++)
+                {
+                    enc.Tiers[t] = new TierConfig
+                    {
+                        ThresholdMs = BitConverter.ToUInt16(data, offset + 14 + t * 4),
+                        Multiplier = BitConverter.ToUInt16(data, offset + 16 + t * 4)
+                    };
+                }
+                cfg.Encoders[e] = enc;
+                offset += 26;
+            }
+            return cfg;
+        }
+    }
+
+    // ========================================================================
+    // PRESETS
+    // ========================================================================
+
+    private static readonly Dictionary<string, EncoderConfig> Presets = new()
+    {
+        ["General Purpose"] = CreatePreset(0, 100, 1, false, false,
+            150, 5, 80, 15, 40, 50),
+        ["Radio Tuner (kHz)"] = CreatePreset(88000, 108000, 100, true, false,
+            150, 10, 80, 100, 40, 1000),
+        ["Audio Mixer (%)"] = CreatePreset(0, 100, 1, false, false,
+            150, 2, 80, 5, 40, 10),
+        ["Fine Control"] = CreatePreset(0, 10000, 1, false, false,
+            150, 5, 80, 25, 40, 100),
+    };
+
+    private static EncoderConfig CreatePreset(int min, int max, int step, bool wrap, bool reverse,
+        ushort t1Thresh, ushort t1Mult, ushort t2Thresh, ushort t2Mult, ushort t3Thresh, ushort t3Mult)
+    {
+        return new EncoderConfig
+        {
+            MinValue = min, MaxValue = max, StepSize = step,
+            Wrap = wrap, Reverse = reverse,
+            Tiers = new[]
+            {
+                new TierConfig { ThresholdMs = t1Thresh, Multiplier = t1Mult },
+                new TierConfig { ThresholdMs = t2Thresh, Multiplier = t2Mult },
+                new TierConfig { ThresholdMs = t3Thresh, Multiplier = t3Mult },
+            }
+        };
+    }
+
+    // ========================================================================
+    // STATE
+    // ========================================================================
+
+    private static DeviceConfig _deviceConfig = new();
+    private static int[] _encoderPositions = new int[NUM_ENCODERS];
+    private static byte _tierByte;
+    private static byte _buttonStates;
+    private static HidDevice? _hidDevice;
+    private static bool _configReceived;
+    private static readonly object _lock = new();
+
     // ========================================================================
     // KEYBOARD HOOK CONFIGURATION (for Keyboard HID mode)
     // ========================================================================
-    
+
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
-    private const int WM_KEYUP = 0x0101;
 
     private const int VK_F1 = 0x70;
     private const int VK_F2 = 0x71;
@@ -63,7 +231,6 @@ public class Program
     private static LowLevelKeyboardProc? _hookCallback;
     private static IntPtr _hookId = IntPtr.Zero;
 
-    // P/Invoke declarations
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
@@ -90,32 +257,13 @@ public class Program
     private static extern void PostQuitMessage(int nExitCode);
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct MSG
-    {
-        public IntPtr hwnd;
-        public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
-        public uint time;
-        public POINT pt;
-    }
+    private struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public POINT pt; }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int x;
-        public int y;
-    }
+    private struct POINT { public int x; public int y; }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct KBDLLHOOKSTRUCT
-    {
-        public uint vkCode;
-        public uint scanCode;
-        public uint flags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
+    private struct KBDLLHOOKSTRUCT { public uint vkCode; public uint scanCode; public uint flags; public uint time; public IntPtr dwExtraInfo; }
 
     // ========================================================================
     // MAIN ENTRY POINT
@@ -126,17 +274,12 @@ public class Program
         Console.WriteLine("RotaryUsb Windows Example");
         Console.WriteLine("=========================");
         Console.WriteLine();
-        Console.WriteLine("This application supports two modes:");
-        Console.WriteLine("  1. Generic HID Mode - Direct device access (recommended)");
-        Console.WriteLine("  2. Keyboard HID Mode - Keyboard hook for F1-F12 keys");
-        Console.WriteLine();
-        
-        // Try Generic HID mode first
+
         var hidDevice = FindGenericHidDevice();
-        
+
         if (hidDevice != null)
         {
-            Console.WriteLine("Generic HID device found! Starting Generic HID mode...");
+            Console.WriteLine("Generic HID device found! Starting...");
             Console.WriteLine();
             RunGenericHidMode(hidDevice);
         }
@@ -145,44 +288,28 @@ public class Program
             Console.WriteLine("No Generic HID device found.");
             Console.WriteLine("Falling back to Keyboard HID mode...");
             Console.WriteLine();
-            Console.WriteLine("Note: For Generic HID mode, ensure the firmware is configured");
-            Console.WriteLine("with boot.py and code_generic_hid.py");
-            Console.WriteLine();
             RunKeyboardHidMode();
         }
     }
 
     // ========================================================================
-    // GENERIC HID MODE IMPLEMENTATION
+    // GENERIC HID MODE — DEVICE DISCOVERY
     // ========================================================================
 
-    /// <summary>
-    /// Find a RotaryUsb device configured for Generic HID mode.
-    /// </summary>
     private static HidDevice? FindGenericHidDevice()
     {
         Console.WriteLine("Searching for Generic HID devices...");
-        
-        // Get all HID devices
         var allDevices = HidDevices.Enumerate().ToList();
         Console.WriteLine($"Found {allDevices.Count} HID devices total.");
-        
-        // Look for vendor-defined devices (Usage Page 0xFF00)
-        var vendorDevices = allDevices.Where(d => 
+
+        var vendorDevices = allDevices.Where(d =>
         {
-            try
-            {
-                var caps = d.Capabilities;
-                return caps.UsagePage == VENDOR_USAGE_PAGE;
-            }
-            catch
-            {
-                return false;
-            }
+            try { return d.Capabilities.UsagePage == VENDOR_USAGE_PAGE; }
+            catch { return false; }
         }).ToList();
-        
+
         Console.WriteLine($"Found {vendorDevices.Count} vendor-defined HID devices.");
-        
+
         foreach (var device in vendorDevices)
         {
             try
@@ -191,14 +318,13 @@ public class Program
                 var caps = device.Capabilities;
                 Console.WriteLine($"  - VID:0x{attrs.VendorId:X4} PID:0x{attrs.ProductId:X4} " +
                                 $"UsagePage:0x{caps.UsagePage:X4} Usage:0x{caps.Usage:X2}");
-                
-                // Check if this matches known RotaryUsb identifiers
+
                 bool vidMatch = KNOWN_VIDS.Contains(attrs.VendorId);
-                bool isVendorPage = caps.UsagePage == VENDOR_USAGE_PAGE;
-                
-                if (isVendorPage && (vidMatch || attrs.VendorId != 0))
+                bool pidMatch = KNOWN_PIDS.Contains(attrs.ProductId);
+
+                if (vidMatch && pidMatch)
                 {
-                    Console.WriteLine($"  -> Potential RotaryUsb device found!");
+                    Console.WriteLine($"  -> RotaryUsb device found!");
                     return device;
                 }
             }
@@ -207,130 +333,54 @@ public class Program
                 Console.WriteLine($"  - Error reading device: {ex.Message}");
             }
         }
-        
-        // Also list any devices matching known VIDs regardless of usage page
-        Console.WriteLine();
-        Console.WriteLine("Devices matching known VIDs:");
-        foreach (var device in allDevices)
-        {
-            try
-            {
-                var attrs = device.Attributes;
-                if (KNOWN_VIDS.Contains(attrs.VendorId))
-                {
-                    var caps = device.Capabilities;
-                    Console.WriteLine($"  - VID:0x{attrs.VendorId:X4} PID:0x{attrs.ProductId:X4} " +
-                                    $"UsagePage:0x{caps.UsagePage:X4} Usage:0x{caps.Usage:X2}");
-                }
-            }
-            catch { }
-        }
-        
+
         return null;
     }
 
-    /// <summary>
-    /// Run in Generic HID mode, reading raw encoder data from the device.
-    /// </summary>
+    // ========================================================================
+    // GENERIC HID MODE — MAIN LOOP
+    // ========================================================================
+
     private static void RunGenericHidMode(HidDevice device)
     {
-        Console.WriteLine("Generic HID Mode");
-        Console.WriteLine("================");
-        Console.WriteLine();
-        Console.WriteLine("HID Report Format:");
-        Console.WriteLine("  Byte 0: Report ID (0x01)");
-        Console.WriteLine("  Byte 1-4: Encoder 1-4 movement (signed, +CW/-CCW)");
-        Console.WriteLine("  Byte 5: Button states (bit 0-3 = buttons 1-4)");
-        Console.WriteLine("  Byte 6-7: Reserved");
-        Console.WriteLine();
-        Console.WriteLine("Press Ctrl+C to exit.");
-        Console.WriteLine();
-        Console.WriteLine("Waiting for HID reports...");
-        Console.WriteLine("-".PadRight(60, '-'));
-
-        // Track encoder positions (accumulated from relative movements)
-        int[] encoderPositions = new int[4];
-        bool[] lastButtonStates = new bool[4];
-
-        // Handle Ctrl+C
-        var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (sender, e) =>
-        {
-            e.Cancel = true;
-            Console.WriteLine("\nShutting down...");
-            cts.Cancel();
-        };
+        _hidDevice = device;
 
         try
         {
             device.OpenDevice();
-            
             if (!device.IsConnected)
             {
                 Console.WriteLine("ERROR: Failed to open device.");
                 return;
             }
 
-            Console.WriteLine("Device opened successfully.");
-            Console.WriteLine();
-
-            // Read reports continuously
             device.MonitorDeviceEvents = true;
-            
-            while (!cts.Token.IsCancellationRequested)
+
+            // Request current config from device
+            Console.WriteLine("Reading config from device...");
+            SendCommand(CMD_READ_CONFIG);
+
+            // Start background reader thread
+            var cts = new CancellationTokenSource();
+            var readerThread = new Thread(() => ReportReaderLoop(device, cts.Token))
             {
-                var report = device.Read(100); // 100ms timeout
-                
-                if (report.Status == HidDeviceData.ReadStatus.Success && report.Data.Length >= 7)
-                {
-                    // Parse the report
-                    // HidLibrary prepends a report ID byte to the data, so the first byte is always the Report ID (0x01)
-                    // Our actual data starts at index 1
-                    int offset = (report.Data.Length >= 8 && report.Data[0] == 0x01) ? 1 : 0;
-                    
-                    // Read encoder movements (signed bytes)
-                    for (int i = 0; i < 4; i++)
-                    {
-                        sbyte movement = (sbyte)report.Data[offset + i];
-                        if (movement != 0)
-                        {
-                            encoderPositions[i] += movement;
-                            string direction = movement > 0 ? "CW" : "CCW";
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Encoder {i + 1}: {direction} ({movement:+#;-#;0}) -> Position: {encoderPositions[i]}");
-                            
-                            // Example action handling
-                            HandleEncoderMovement(i + 1, movement, encoderPositions[i]);
-                        }
-                    }
-                    
-                    // Read button states
-                    byte buttonByte = report.Data[offset + 4];
-                    for (int i = 0; i < 4; i++)
-                    {
-                        bool pressed = (buttonByte & (1 << i)) != 0;
-                        if (pressed != lastButtonStates[i])
-                        {
-                            lastButtonStates[i] = pressed;
-                            string state = pressed ? "PRESSED" : "RELEASED";
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Button {i + 1}: {state}");
-                            
-                            if (pressed)
-                            {
-                                HandleButtonPress(i + 1);
-                            }
-                        }
-                    }
-                }
-                else if (report.Status == HidDeviceData.ReadStatus.WaitTimedOut)
-                {
-                    // Normal timeout, continue
-                }
-                else if (report.Status != HidDeviceData.ReadStatus.Success)
-                {
-                    Console.WriteLine($"Read error: {report.Status}");
-                    Thread.Sleep(100);
-                }
+                IsBackground = true
+            };
+            readerThread.Start();
+
+            // Wait briefly for config readback
+            Thread.Sleep(500);
+            if (!_configReceived)
+            {
+                Console.WriteLine("No config readback received, using defaults.");
+                _deviceConfig = CreateDefaultConfig();
             }
+
+            // Main menu loop
+            RunMainMenu(device, cts);
+
+            cts.Cancel();
+            readerThread.Join(1000);
         }
         catch (Exception ex)
         {
@@ -343,58 +393,405 @@ public class Program
         }
     }
 
-    /// <summary>
-    /// Handle encoder movement - customize this for your application.
-    /// </summary>
-    private static void HandleEncoderMovement(int encoderNumber, int movement, int position)
+    private static DeviceConfig CreateDefaultConfig()
     {
-        // Example: Different actions based on encoder number
-        switch (encoderNumber)
+        var cfg = new DeviceConfig();
+        var preset = Presets["General Purpose"];
+        for (int i = 0; i < NUM_ENCODERS; i++)
+            cfg.Encoders[i] = preset.Clone();
+        return cfg;
+    }
+
+    // ========================================================================
+    // REPORT READER (background thread)
+    // ========================================================================
+
+    private static void ReportReaderLoop(HidDevice device, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && device.IsConnected)
         {
-            case 1:
-                Console.WriteLine($"  -> Action: Encoder 1 could control volume ({(movement > 0 ? "up" : "down")})");
-                break;
-            case 2:
-                Console.WriteLine($"  -> Action: Encoder 2 could control brightness");
-                break;
-            case 3:
-                Console.WriteLine($"  -> Action: Encoder 3 could scroll content");
-                break;
-            case 4:
-                Console.WriteLine($"  -> Action: Encoder 4 could adjust zoom level");
-                break;
+            var report = device.Read(100);
+            if (report.Status != HidDeviceData.ReadStatus.Success || report.Data.Length < 2)
+                continue;
+
+            byte reportId = report.Data[0];
+
+            if (reportId == REPORT_ID_POSITIONS && report.Data.Length >= 22)
+            {
+                // Input Report ID 0x01: 21 bytes of position data
+                // HidLibrary prepends report ID, so data[1..21] is payload
+                lock (_lock)
+                {
+                    for (int i = 0; i < NUM_ENCODERS; i++)
+                        _encoderPositions[i] = BitConverter.ToInt32(report.Data, 1 + i * 4);
+                    _buttonStates = report.Data[17];
+                    _tierByte = report.Data[18];
+                }
+            }
+            else if (reportId == REPORT_ID_CONFIG && report.Data.Length >= FULL_CONFIG_SIZE + 1)
+            {
+                // Input Report ID 0x02: 106 bytes config readback
+                var configData = new byte[FULL_CONFIG_SIZE];
+                Array.Copy(report.Data, 1, configData, 0, FULL_CONFIG_SIZE);
+                var parsed = DeviceConfig.Deserialize(configData);
+                if (parsed != null)
+                {
+                    lock (_lock)
+                    {
+                        _deviceConfig = parsed;
+                        _configReceived = true;
+                    }
+                }
+            }
         }
     }
 
-    /// <summary>
-    /// Handle button press - customize this for your application.
-    /// </summary>
-    private static void HandleButtonPress(int buttonNumber)
+    // ========================================================================
+    // HID COMMUNICATION
+    // ========================================================================
+
+    private static void SendConfig(DeviceConfig config)
     {
-        switch (buttonNumber)
+        if (_hidDevice == null) return;
+        var payload = config.Serialize();
+        // HidLibrary Write: first byte is report ID
+        var data = new byte[FULL_CONFIG_SIZE + 1];
+        data[0] = REPORT_ID_CONFIG;
+        Array.Copy(payload, 0, data, 1, FULL_CONFIG_SIZE);
+        _hidDevice.Write(data);
+    }
+
+    private static void SendCommand(byte command)
+    {
+        if (_hidDevice == null) return;
+        // Report ID + 2 bytes payload
+        var data = new byte[3];
+        data[0] = REPORT_ID_COMMAND;
+        data[1] = command;
+        data[2] = 0x00;
+        _hidDevice.Write(data);
+    }
+
+    // ========================================================================
+    // MAIN MENU
+    // ========================================================================
+
+    private static void RunMainMenu(HidDevice device, CancellationTokenSource cts)
+    {
+        while (!cts.IsCancellationRequested && device.IsConnected)
         {
-            case 1:
-                Console.WriteLine($"  -> Action: Button 1 could toggle mute");
-                break;
-            case 2:
-                Console.WriteLine($"  -> Action: Button 2 could reset brightness");
-                break;
-            case 3:
-                Console.WriteLine($"  -> Action: Button 3 could toggle scroll lock");
-                break;
-            case 4:
-                Console.WriteLine($"  -> Action: Button 4 could reset zoom to 100%");
-                break;
+            Console.Clear();
+            Console.WriteLine("RotaryUsb Configuration");
+            Console.WriteLine("========================");
+
+            var attrs = device.Attributes;
+            Console.WriteLine($"Device connected: VID:0x{attrs.VendorId:X4} PID:0x{attrs.ProductId:X4}");
+            Console.WriteLine();
+
+            lock (_lock)
+            {
+                Console.WriteLine("Current encoder values:");
+                for (int i = 0; i < NUM_ENCODERS; i++)
+                {
+                    var enc = _deviceConfig.Encoders[i];
+                    int tier = (_tierByte >> (i * 2)) & 0x03;
+                    string tierStr = tier > 0 ? $"  {new string('*', tier)} Tier {tier}" : "";
+                    Console.WriteLine($"  Enc{i + 1}: {_encoderPositions[i],10}  [{enc.MinValue} - {enc.MaxValue}, step={enc.StepSize}]{tierStr}");
+                }
+                Console.WriteLine();
+                Console.Write("  Buttons: ");
+                for (int i = 0; i < NUM_ENCODERS; i++)
+                {
+                    bool pressed = (_buttonStates & (1 << i)) != 0;
+                    Console.Write(pressed ? "[X] " : "[ ] ");
+                }
+                Console.WriteLine();
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("[M] Monitor - Live display of encoder values");
+            Console.WriteLine("[C] Configure encoder");
+            Console.WriteLine("[S] Save config to device flash");
+            Console.WriteLine("[D] Reset to defaults");
+            Console.WriteLine("[R] Reset positions");
+            Console.WriteLine("[Q] Quit");
+            Console.Write("\nChoice: ");
+
+            var key = Console.ReadKey(true);
+            switch (char.ToUpper(key.KeyChar))
+            {
+                case 'M':
+                    RunMonitor(device, cts.Token);
+                    break;
+                case 'C':
+                    RunConfigureEncoder(device);
+                    break;
+                case 'S':
+                    SendCommand(CMD_SAVE_CONFIG);
+                    Console.WriteLine("\nConfig save command sent.");
+                    Thread.Sleep(1000);
+                    break;
+                case 'D':
+                    SendCommand(CMD_RESET_DEFAULTS);
+                    Console.WriteLine("\nReset to defaults command sent.");
+                    Thread.Sleep(500);
+                    SendCommand(CMD_READ_CONFIG);
+                    Thread.Sleep(500);
+                    break;
+                case 'R':
+                    SendCommand(CMD_RESET_POSITIONS);
+                    Console.WriteLine("\nReset positions command sent.");
+                    Thread.Sleep(1000);
+                    break;
+                case 'Q':
+                    return;
+            }
         }
+    }
+
+    // ========================================================================
+    // LIVE MONITOR
+    // ========================================================================
+
+    private static void RunMonitor(HidDevice device, CancellationToken ct)
+    {
+        Console.Clear();
+        Console.WriteLine("Live Monitor (press any key to return)");
+        Console.WriteLine("=======================================");
+
+        while (!ct.IsCancellationRequested && device.IsConnected && !Console.KeyAvailable)
+        {
+            Console.SetCursorPosition(0, 2);
+
+            lock (_lock)
+            {
+                for (int i = 0; i < NUM_ENCODERS; i++)
+                {
+                    var enc = _deviceConfig.Encoders[i];
+                    int tier = (_tierByte >> (i * 2)) & 0x03;
+                    string tierStr = tier switch
+                    {
+                        1 => "  * Tier 1",
+                        2 => "  ** Tier 2",
+                        3 => "  *** Tier 3",
+                        _ => ""
+                    };
+                    Console.WriteLine($"Enc{i + 1}: {_encoderPositions[i],10}  [{enc.MinValue}-{enc.MaxValue}]{tierStr,-20}");
+                }
+
+                Console.WriteLine();
+                Console.Write("Buttons: ");
+                for (int i = 0; i < NUM_ENCODERS; i++)
+                {
+                    bool pressed = (_buttonStates & (1 << i)) != 0;
+                    Console.Write(pressed ? "[X] " : "[ ] ");
+                }
+                Console.WriteLine("          ");
+            }
+
+            Thread.Sleep(50);
+        }
+
+        if (Console.KeyAvailable)
+            Console.ReadKey(true); // consume the key
+    }
+
+    // ========================================================================
+    // CONFIGURE ENCODER
+    // ========================================================================
+
+    private static void RunConfigureEncoder(HidDevice device)
+    {
+        Console.Clear();
+        Console.WriteLine("Configure Encoder");
+        Console.WriteLine("=================");
+        Console.Write("Select encoder [1-4]: ");
+
+        var k = Console.ReadKey(true);
+        int encIdx = k.KeyChar - '1';
+        if (encIdx < 0 || encIdx >= NUM_ENCODERS)
+        {
+            Console.WriteLine("\nInvalid encoder number.");
+            Thread.Sleep(1000);
+            return;
+        }
+        Console.WriteLine(k.KeyChar);
+
+        EncoderConfig working;
+        lock (_lock)
+        {
+            working = _deviceConfig.Encoders[encIdx].Clone();
+        }
+
+        while (true)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Encoder {encIdx + 1} current config:");
+            Console.WriteLine($"  Min: {working.MinValue}  Max: {working.MaxValue}  Step: {working.StepSize}  " +
+                            $"Wrap: {(working.Wrap ? "Yes" : "No")}  Reverse: {(working.Reverse ? "Yes" : "No")}");
+            Console.Write("  ");
+            for (int t = 0; t < NUM_TIERS; t++)
+            {
+                var tier = working.Tiers[t];
+                if (tier.ThresholdMs > 0)
+                    Console.Write($"Tier {t + 1}: <{tier.ThresholdMs}ms -> {tier.Multiplier}x    ");
+                else
+                    Console.Write($"Tier {t + 1}: disabled    ");
+            }
+            Console.WriteLine();
+            Console.WriteLine();
+
+            Console.WriteLine("[1] Min value          [5] Reverse");
+            Console.WriteLine("[2] Max value          [6] Tier 1 (threshold, multiplier)");
+            Console.WriteLine("[3] Step size          [7] Tier 2");
+            Console.WriteLine("[4] Wrap on/off        [8] Tier 3");
+            Console.WriteLine("[A] Apply (send to device)");
+            Console.WriteLine("[P] Load preset");
+            Console.WriteLine("[B] Back");
+            Console.Write("\nChoice: ");
+
+            var choice = Console.ReadKey(true);
+            Console.WriteLine(choice.KeyChar);
+
+            switch (char.ToUpper(choice.KeyChar))
+            {
+                case '1':
+                    working.MinValue = ReadInt("Min value", working.MinValue);
+                    break;
+                case '2':
+                    working.MaxValue = ReadInt("Max value", working.MaxValue);
+                    break;
+                case '3':
+                    working.StepSize = ReadInt("Step size", working.StepSize);
+                    break;
+                case '4':
+                    working.Wrap = !working.Wrap;
+                    Console.WriteLine($"  Wrap: {(working.Wrap ? "Yes" : "No")}");
+                    break;
+                case '5':
+                    working.Reverse = !working.Reverse;
+                    Console.WriteLine($"  Reverse: {(working.Reverse ? "Yes" : "No")}");
+                    break;
+                case '6':
+                    EditTier(working.Tiers[0], "Tier 1");
+                    break;
+                case '7':
+                    EditTier(working.Tiers[1], "Tier 2");
+                    break;
+                case '8':
+                    EditTier(working.Tiers[2], "Tier 3");
+                    break;
+                case 'A':
+                    var validationError = ValidateEncoderConfig(working);
+                    if (validationError != null)
+                    {
+                        Console.WriteLine($"  Validation error: {validationError}");
+                        break;
+                    }
+                    lock (_lock)
+                    {
+                        _deviceConfig.Encoders[encIdx] = working;
+                        SendConfig(_deviceConfig);
+                    }
+                    Console.WriteLine("  Config sent to device.");
+                    // Readback to verify
+                    Thread.Sleep(200);
+                    SendCommand(CMD_READ_CONFIG);
+                    Thread.Sleep(500);
+                    break;
+                case 'P':
+                    var preset = SelectPreset();
+                    if (preset != null)
+                        working = preset.Clone();
+                    break;
+                case 'B':
+                    return;
+            }
+        }
+    }
+
+    private static int ReadInt(string prompt, int current)
+    {
+        Console.Write($"  {prompt} [{current}]: ");
+        var input = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(input)) return current;
+        if (int.TryParse(input, out int value)) return value;
+        Console.WriteLine("  Invalid number, keeping current value.");
+        return current;
+    }
+
+    private static string? ValidateEncoderConfig(EncoderConfig enc)
+    {
+        if (enc.MinValue >= enc.MaxValue)
+            return $"min ({enc.MinValue}) must be less than max ({enc.MaxValue})";
+        if (enc.StepSize <= 0)
+            return $"step size ({enc.StepSize}) must be positive";
+
+        // Check enabled tiers
+        ushort prevThreshold = 0;
+        ushort prevMultiplier = 0;
+        bool hasPrev = false;
+        for (int i = 0; i < NUM_TIERS; i++)
+        {
+            if (enc.Tiers[i].ThresholdMs > 0)
+            {
+                if (enc.Tiers[i].Multiplier == 0)
+                    return $"tier {i + 1} has threshold but multiplier is 0";
+                if (hasPrev)
+                {
+                    if (enc.Tiers[i].ThresholdMs >= prevThreshold)
+                        return $"tier {i + 1} threshold must be less than previous enabled tier";
+                    if (enc.Tiers[i].Multiplier <= prevMultiplier)
+                        return $"tier {i + 1} multiplier must be greater than previous enabled tier";
+                }
+                prevThreshold = enc.Tiers[i].ThresholdMs;
+                prevMultiplier = enc.Tiers[i].Multiplier;
+                hasPrev = true;
+            }
+        }
+        return null;
+    }
+
+    private static void EditTier(TierConfig tier, string name)
+    {
+        Console.Write($"  {name} threshold ms [{tier.ThresholdMs}] (0 to disable): ");
+        var input = Console.ReadLine();
+        if (!string.IsNullOrWhiteSpace(input) && ushort.TryParse(input, out ushort thresh))
+            tier.ThresholdMs = thresh;
+
+        if (tier.ThresholdMs > 0)
+        {
+            Console.Write($"  {name} multiplier [{tier.Multiplier}]: ");
+            input = Console.ReadLine();
+            if (!string.IsNullOrWhiteSpace(input) && ushort.TryParse(input, out ushort mult))
+                tier.Multiplier = mult;
+        }
+    }
+
+    private static EncoderConfig? SelectPreset()
+    {
+        Console.WriteLine("  Presets:");
+        var presetNames = Presets.Keys.ToArray();
+        for (int i = 0; i < presetNames.Length; i++)
+            Console.WriteLine($"    [{i + 1}] {presetNames[i]}");
+        Console.Write("  Select preset: ");
+
+        var k = Console.ReadKey(true);
+        Console.WriteLine(k.KeyChar);
+        int idx = k.KeyChar - '1';
+        if (idx >= 0 && idx < presetNames.Length)
+        {
+            Console.WriteLine($"  Loaded preset: {presetNames[idx]}");
+            return Presets[presetNames[idx]];
+        }
+        Console.WriteLine("  Invalid selection.");
+        return null;
     }
 
     // ========================================================================
     // KEYBOARD HID MODE IMPLEMENTATION
     // ========================================================================
 
-    /// <summary>
-    /// Run in Keyboard HID mode using a low-level keyboard hook.
-    /// </summary>
     private static void RunKeyboardHidMode()
     {
         Console.WriteLine("Keyboard HID Mode");
@@ -408,38 +805,29 @@ public class Program
         Console.WriteLine();
         Console.WriteLine("Press Ctrl+C to exit.");
         Console.WriteLine();
-        Console.WriteLine("Waiting for keyboard events...");
-        Console.WriteLine("-".PadRight(40, '-'));
 
-        // Handle Ctrl+C gracefully
         Console.CancelKeyPress += (sender, e) =>
         {
             e.Cancel = true;
-            Console.WriteLine("\nShutting down...");
-            if (_hookId != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(_hookId);
-            }
+            if (_hookId != IntPtr.Zero) UnhookWindowsHookEx(_hookId);
             PostQuitMessage(0);
         };
 
-        // Install the keyboard hook
         _hookCallback = HookCallback;
         using var curProcess = System.Diagnostics.Process.GetCurrentProcess();
         using var curModule = curProcess.MainModule;
-        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _hookCallback, 
+        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _hookCallback,
             GetModuleHandle(curModule?.ModuleName), 0);
 
         if (_hookId == IntPtr.Zero)
         {
-            Console.WriteLine("Failed to install keyboard hook. Error: " + Marshal.GetLastWin32Error());
+            Console.WriteLine("Failed to install keyboard hook.");
             return;
         }
 
-        Console.WriteLine("Keyboard hook installed successfully.");
-        Console.WriteLine();
+        Console.WriteLine("Keyboard hook installed. Waiting for events...");
+        Console.WriteLine("-".PadRight(40, '-'));
 
-        // Message loop - required for the hook to work
         MSG msg;
         while (GetMessage(out msg, IntPtr.Zero, 0, 0))
         {
@@ -447,9 +835,8 @@ public class Program
             DispatchMessage(ref msg);
         }
 
-        // Cleanup
         UnhookWindowsHookEx(_hookId);
-        Console.WriteLine("Keyboard hook removed. Goodbye!");
+        Console.WriteLine("Goodbye!");
     }
 
     private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -457,53 +844,19 @@ public class Program
         if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
         {
             var hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-            int vkCode = (int)hookStruct.vkCode;
-
-            // Handle RotaryUsb keys (F1-F12)
-            string? action = GetEncoderAction(vkCode);
-            if (action != null)
+            string? action = (int)hookStruct.vkCode switch
             {
+                VK_F1 => "Encoder 1: CW", VK_F2 => "Encoder 1: CCW",
+                VK_F3 => "Encoder 2: CW", VK_F4 => "Encoder 2: CCW",
+                VK_F5 => "Encoder 3: CW", VK_F6 => "Encoder 3: CCW",
+                VK_F7 => "Encoder 4: CW", VK_F8 => "Encoder 4: CCW",
+                VK_F9 => "Encoder 1: Button", VK_F10 => "Encoder 2: Button",
+                VK_F11 => "Encoder 3: Button", VK_F12 => "Encoder 4: Button",
+                _ => null
+            };
+            if (action != null)
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {action}");
-                HandleKeyboardEncoderEvent(vkCode);
-            }
         }
-
         return CallNextHookEx(_hookId, nCode, wParam, lParam);
-    }
-
-    private static string? GetEncoderAction(int vkCode)
-    {
-        return vkCode switch
-        {
-            VK_F1 => "Encoder 1: Clockwise rotation",
-            VK_F2 => "Encoder 1: Counter-clockwise rotation",
-            VK_F3 => "Encoder 2: Clockwise rotation",
-            VK_F4 => "Encoder 2: Counter-clockwise rotation",
-            VK_F5 => "Encoder 3: Clockwise rotation",
-            VK_F6 => "Encoder 3: Counter-clockwise rotation",
-            VK_F7 => "Encoder 4: Clockwise rotation",
-            VK_F8 => "Encoder 4: Counter-clockwise rotation",
-            VK_F9 => "Encoder 1: Button pressed",
-            VK_F10 => "Encoder 2: Button pressed",
-            VK_F11 => "Encoder 3: Button pressed",
-            VK_F12 => "Encoder 4: Button pressed",
-            _ => null
-        };
-    }
-
-    private static void HandleKeyboardEncoderEvent(int vkCode)
-    {
-        switch (vkCode)
-        {
-            case VK_F1:
-                Console.WriteLine("  -> Action: Could increase volume");
-                break;
-            case VK_F2:
-                Console.WriteLine("  -> Action: Could decrease volume");
-                break;
-            case VK_F9:
-                Console.WriteLine("  -> Action: Could toggle mute");
-                break;
-        }
     }
 }
