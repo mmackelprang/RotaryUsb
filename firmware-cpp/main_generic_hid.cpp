@@ -522,8 +522,9 @@ static bool pending_config_readback = false;
 static bool pending_save = false;
 
 // ============================================================================
-// TINYUSB DESCRIPTORS AND CALLBACKS
+// TINYUSB DESCRIPTORS AND CALLBACKS (extern "C" required — TinyUSB is compiled as C)
 // ============================================================================
+extern "C" {
 
 static const tusb_desc_device_t device_descriptor = {
     .bLength            = sizeof(tusb_desc_device_t),
@@ -555,10 +556,11 @@ enum {
 static const uint8_t configuration_descriptor[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN,
                           TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    // EP max packet size must be <= 64 for full-speed USB (RP2040)
     TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
                              sizeof(hid_report_descriptor),
                              EPNUM_HID_OUT, EPNUM_HID_IN,
-                             CFG_TUD_HID_EP_BUFSIZE, 10)
+                             64, 10)
 };
 
 static const char* string_descriptors[] = {
@@ -662,6 +664,8 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     return 0;
 }
 
+} // extern "C"
+
 // ============================================================================
 // HID TASKS
 // ============================================================================
@@ -682,7 +686,7 @@ static void hid_task() {
     const uint32_t interval_ms = 10;
     static uint32_t start_ms = 0;
 
-    if (board_millis() - start_ms < interval_ms) return;
+    if (to_ms_since_boot(get_absolute_time()) - start_ms < interval_ms) return;
     start_ms += interval_ms;
 
     if (!tud_hid_ready()) return;

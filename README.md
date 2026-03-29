@@ -111,50 +111,57 @@ Notes:
 
 ### System Block Diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              USB HOST (PC)                                  │
-│                                   │                                         │
-│                              USB 5V / D+ / D-                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         RASPBERRY PI PICO                                   │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                        POWER SECTION                                 │    │
-│  │   USB VBUS (5V) ──┬──► Internal 3.3V Regulator ──► 3V3 Pin (3.3V)   │    │
-│  │                   │                                                  │    │
-│  │                   └──► VBUS Pin (5V out - use with caution!)        │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                        GPIO SECTION (3.3V LOGIC)                    │    │
-│  │                                                                      │    │
-│  │   GP2  ◄──── Encoder 1 CLK (A)     GP11 ◄──── Encoder 4 CLK (A)    │    │
-│  │   GP3  ◄──── Encoder 1 DT  (B)     GP12 ◄──── Encoder 4 DT  (B)    │    │
-│  │   GP4  ◄──── Encoder 1 SW          GP13 ◄──── Encoder 4 SW         │    │
-│  │   GP5  ◄──── Encoder 2 CLK (A)                                      │    │
-│  │   GP6  ◄──── Encoder 2 DT  (B)     Internal Pull-ups: ENABLED      │    │
-│  │   GP7  ◄──── Encoder 2 SW          (~50-80kΩ to 3.3V on each GPIO) │    │
-│  │   GP8  ◄──── Encoder 3 CLK (A)                                      │    │
-│  │   GP9  ◄──── Encoder 3 DT  (B)                                      │    │
-│  │   GP10 ◄──── Encoder 3 SW                                           │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                             │
-│   GND ◄───────────────────────────────────────────────────────► Common Ground  │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-          ┌─────────────────────────┼─────────────────────────┐
-          │                         │                         │
-          ▼                         ▼                         ▼
-    ┌───────────┐             ┌───────────┐             ┌───────────┐
-    │ Encoder 1 │             │ Encoder 2 │             │    ...    │
-    │  KY-040   │             │  KY-040   │             │ Encoder 4 │
-    │           │             │           │             │           │
-    │ CLK DT SW │             │ CLK DT SW │             │ CLK DT SW │
-    │  +   GND  │             │  +   GND  │             │  +   GND  │
-    └───────────┘             └───────────┘             └───────────┘
+```mermaid
+block-beta
+    columns 3
+
+    block:host:3
+        columns 1
+        USB_HOST["USB HOST (PC)"]
+        usb_signals["USB 5V / D+ / D-"]
+    end
+
+    space:3
+
+    block:pico:3
+        columns 1
+        pico_title["RASPBERRY PI PICO"]
+
+        block:power:1
+            columns 1
+            power_title["POWER SECTION"]
+            vbus_in["USB VBUS 5V"]
+            reg["Internal 3.3V Regulator → 3V3 Pin"]
+            vbus_out["VBUS Pin (5V out — use with caution)"]
+        end
+
+        block:gpio:1
+            columns 1
+            gpio_title["GPIO SECTION — 3.3V LOGIC\nInternal Pull-ups ENABLED (~50–80kΩ to 3.3V)"]
+            enc1["GP2 ← Enc1 CLK · GP3 ← Enc1 DT · GP4 ← Enc1 SW"]
+            enc2["GP5 ← Enc2 CLK · GP6 ← Enc2 DT · GP7 ← Enc2 SW"]
+            enc3["GP8 ← Enc3 CLK · GP9 ← Enc3 DT · GP10 ← Enc3 SW"]
+            enc4["GP11 ← Enc4 CLK · GP12 ← Enc4 DT · GP13 ← Enc4 SW"]
+        end
+
+        gnd["GND ↔ Common Ground"]
+    end
+
+    space:3
+
+    block:encoders:3
+        columns 4
+        e1["Encoder 1\nCLK DT SW\n+ GND"]
+        e2["Encoder 2\nCLK DT SW\n+ GND"]
+        e3["Encoder 3\nCLK DT SW\n+ GND"]
+        e4["Encoder 4\nCLK DT SW\n+ GND"]
+    end
+
+    usb_signals --> pico_title
+    gnd --> e1
+    gnd --> e2
+    gnd --> e3
+    gnd --> e4
 ```
 
 ### Detailed Wiring Schematic
@@ -342,16 +349,15 @@ Both KY‑040 modules and bare encoders work safely with the Pico without any ex
    - **KY‑040 modules** have onboard 10 kΩ pull‑ups, but these are either not connected (if you leave the `+` pin unconnected) or safely connected to 3.3 V (if you wire `+` to Pico 3V3). Either way, the Pico's internal pull‑ups work in parallel.
 
 3. **Safe Signal Flow (both encoder types)**:
+   ```mermaid
+   flowchart LR
+       V3["3.3V"] -- "~50–80kΩ\n(internal pull-up)" --> GPIO["Pico GPIO"]
+       GPIO --- SW["Encoder Switch"]
+       SW --> GND["GND"]
    ```
-   With Pico internal pull-ups (RECOMMENDED — no external resistors needed):
 
-   Pico GPIO ◄────┬──── ~50-80kΩ ────► 3.3V (internal pull-up)
-                  │
-                  └──── Encoder Switch ────► GND
-
-   Switch OPEN:  GPIO reads HIGH (3.3V from internal pull-up)
-   Switch CLOSED: GPIO reads LOW (connected to GND through switch)
-   ```
+   - **Switch OPEN:** GPIO reads HIGH (3.3V from internal pull-up)
+   - **Switch CLOSED:** GPIO reads LOW (connected to GND through switch)
 
 #### ⚠️ CRITICAL: Voltage Warnings
 
@@ -366,13 +372,13 @@ Both KY‑040 modules and bare encoders work safely with the Pico without any ex
 
 For other components that output 5V logic signals (NOT applicable to standard rotary encoders), you would need level shifting:
 
+```mermaid
+flowchart LR
+    DEV["5V Device Output"] -- "10kΩ" --> V3["3.3V"]
+    DEV --> GPIO["Pico GPIO\n(now safe ≤3.3V)"]
 ```
-5V Device Output ────┬──── 10kΩ ────► 3.3V
-                     │
-                     └──── To Pico GPIO (now safe 3.3V max)
-   
-   OR use a dedicated level shifter IC (e.g., TXS0108E, BSS138-based)
-```
+
+Alternatively, use a dedicated level shifter IC (e.g., TXS0108E, BSS138-based).
 
 ### Power Supply Requirements
 
@@ -387,29 +393,31 @@ For other components that output 5V logic signals (NOT applicable to standard ro
 #### Power Supply Options
 
 **Option 1: USB Power (Recommended)**
-```
-PC USB Port ────► Pico USB ────► Pico 3V3 Regulator ────► Encoders & GPIO
-     │
-     └── Provides: 5V @ 500mA (USB 2.0) or 900mA (USB 3.0)
-         More than sufficient for this project
+
+```mermaid
+flowchart LR
+    PC["PC USB Port\n5V @ 500mA (USB 2.0)\nor 900mA (USB 3.0)"] --> PICO["Pico USB"] --> REG["Pico 3V3 Regulator"] --> ENC["Encoders & GPIO"]
 ```
 
 **Option 2: External 5V Supply via VSYS**
-```
-External 5V PSU ────► VSYS (Pin 39) ────► Pico 3V3 Regulator ────► Encoders
-                 │
-                 └── Also connect GND to Pico GND
-                     Useful for standalone/embedded applications
+
+```mermaid
+flowchart LR
+    PSU["External 5V PSU"] --> VSYS["VSYS (Pin 39)"] --> REG["Pico 3V3 Regulator"] --> ENC["Encoders"]
+    PSU -. "GND" .-> GND["Pico GND"]
 ```
 
+Useful for standalone/embedded applications.
+
 **Option 3: External 3.3V Supply via 3V3 Pin**
+
+```mermaid
+flowchart LR
+    PSU["External 3.3V\nRegulated PSU"] --> PIN["3V3 (Pin 36)"] --> DEV["Pico & Encoders"]
+    PSU -. "GND" .-> GND["Pico GND"]
 ```
-External 3.3V Regulated PSU ────► 3V3 (Pin 36) ────► Pico & Encoders
-                            │
-                            └── Bypass internal regulator
-                                Use regulated 3.3V only (not 3.7V!)
-                                Connect GND to Pico GND
-```
+
+Bypasses internal regulator. Use regulated 3.3V only (not 3.7V).
 
 #### Power Supply Recommendations
 

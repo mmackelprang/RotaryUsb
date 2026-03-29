@@ -53,23 +53,8 @@ static const uint8_t hid_report_descriptor[] = {
     0xC0               // End Collection
 };
 
-// ============================================================================
-// HID KEYCODES (USB HID Usage Table)
-// ============================================================================
-
-// Function keys F1-F12
-constexpr uint8_t HID_KEY_F1  = 0x3A;
-constexpr uint8_t HID_KEY_F2  = 0x3B;
-constexpr uint8_t HID_KEY_F3  = 0x3C;
-constexpr uint8_t HID_KEY_F4  = 0x3D;
-constexpr uint8_t HID_KEY_F5  = 0x3E;
-constexpr uint8_t HID_KEY_F6  = 0x3F;
-constexpr uint8_t HID_KEY_F7  = 0x40;
-constexpr uint8_t HID_KEY_F8  = 0x41;
-constexpr uint8_t HID_KEY_F9  = 0x42;
-constexpr uint8_t HID_KEY_F10 = 0x43;
-constexpr uint8_t HID_KEY_F11 = 0x44;
-constexpr uint8_t HID_KEY_F12 = 0x45;
+// HID keycodes (HID_KEY_F1 through HID_KEY_F12) are provided by TinyUSB's
+// hid.h header — no local definitions needed.
 
 // ============================================================================
 // ENCODER CONFIGURATION
@@ -159,8 +144,9 @@ static void key_queue_pop() {
 }
 
 // ============================================================================
-// TINYUSB CALLBACKS
+// TINYUSB CALLBACKS (extern "C" required — TinyUSB is compiled as C)
 // ============================================================================
+extern "C" {
 
 // Device descriptor
 static const tusb_desc_device_t device_descriptor = {
@@ -195,7 +181,8 @@ static const uint8_t configuration_descriptor[] = {
     // Configuration descriptor
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
     // HID descriptor
-    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_KEYBOARD, sizeof(hid_report_descriptor), EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, 10)
+    // EP max packet size must be <= 64 for full-speed USB (RP2040)
+    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_KEYBOARD, sizeof(hid_report_descriptor), EPNUM_HID, 16, 10)
 };
 
 // String descriptors
@@ -275,6 +262,8 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     return 0;
 }
 
+} // extern "C"
+
 // ============================================================================
 // HID TASK
 // ============================================================================
@@ -290,7 +279,7 @@ static void hid_task() {
     const uint32_t interval_ms = 10;
     static uint32_t start_ms = 0;
 
-    if (board_millis() - start_ms < interval_ms) return;
+    if (to_ms_since_boot(get_absolute_time()) - start_ms < interval_ms) return;
     start_ms += interval_ms;
 
     if (!tud_hid_ready()) return;

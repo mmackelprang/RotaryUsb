@@ -19,6 +19,9 @@ add_executable(rotary_usb
     encoder.cpp
 )
 
+# Make tusb_config.h findable by TinyUSB
+target_include_directories(rotary_usb PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+
 # Pull in common dependencies
 target_link_libraries(rotary_usb
     pico_stdlib
