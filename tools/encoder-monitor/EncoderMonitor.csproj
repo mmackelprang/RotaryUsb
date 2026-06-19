@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>EncoderMonitor</RootNamespace>
+    <AssemblyName>encoder-monitor</AssemblyName>
+    <!-- Windows-only diagnostic (HID via HidLibrary); CursorVisible is guarded at runtime. -->
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="HidLibrary" Version="3.3.40" />
+  </ItemGroup>
+
+</Project>
