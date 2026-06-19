@@ -8,10 +8,16 @@
 //   * press a shaft -> its Button cell should light up
 //   * spin fast     -> the accel tier (x2/x3) should appear
 //
-// It does NOT change or save any device config. The default firmware config is
-// range 0-100 / step 1, so Values clamp at the 0 and 100 bounds (that's normal,
-// not a fault). Press R to re-zero the positions between tests.
+// The firmware only sends a USB report WHEN something changes, so at idle every
+// value reads 0 and "reports" stays flat — that is normal, not a fault.
+//
+// DEVICE LINK probe: on startup the monitor sends a READ_CONFIG command and
+// waits for the device's config-readback reply. That round-trip does not involve
+// the encoders at all, so it isolates faults:
+//   * LINK ok but positions never move  -> encoder/GPIO/wiring (device side)
+//   * LINK never replies                -> firmware not running / USB read path
 
+using System.Diagnostics;
 using System.Text;
 using HidLibrary;
 
@@ -28,10 +34,13 @@ internal static class Program
 
     // Report IDs / commands (from the firmware's HID protocol).
     private const byte ReportIdPositions = 0x01;
+    private const byte ReportIdConfig = 0x02;
     private const byte ReportIdCommand = 0x03;
     private const byte CmdResetPositions = 0x03;
+    private const byte CmdReadConfig = 0x04;
+    private const int FullConfigSize = 106;
 
-    private const int LineWidth = 70;
+    private const int LineWidth = 74;
 
     // Shared state: written by the reader thread, read by the UI thread.
     private static readonly object Lock = new();
@@ -42,7 +51,16 @@ internal static class Program
     private static readonly long[] BtnPresses = new long[NumEncoders];
     private static byte ButtonStates;
     private static byte TierByte;
-    private static long ReportCount;
+
+    private static long PosReports;     // count of position reports (ID 0x01)
+    private static long CfgReports;     // count of config readbacks (ID 0x02)
+    private static long AnyReports;     // count of ALL input reports of any ID
+    private static byte LastUnknownId;  // last report ID we didn't recognize (0 = none)
+
+    // Device-link probe results (config readback).
+    private static bool ConfigReceived;
+    private static byte CfgVersion;
+    private static int Enc1Min, Enc1Max, Enc1Step;
 
     // Reader-thread tracking for edge/delta detection.
     private static readonly int[] PrevPositions = new int[NumEncoders];
@@ -83,6 +101,9 @@ internal static class Program
         var cts = new CancellationTokenSource();
         var reader = new Thread(() => ReaderLoop(device, cts.Token)) { IsBackground = true };
         reader.Start();
+
+        // Probe the device link immediately (independent of the encoders).
+        SendCommand(CmdReadConfig);
 
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -133,57 +154,85 @@ internal static class Program
             if (report.Status != HidDeviceData.ReadStatus.Success) continue;
 
             var data = report.Data;
-            // HidLibrary prepends the report ID, so the 21-byte payload starts at data[1].
-            if (data.Length < 22 || data[0] != ReportIdPositions) continue;
+            if (data.Length < 1) continue;
+            byte id = data[0];
 
             lock (Lock)
             {
-                ReportCount++;
-                if (ResetTrackingRequested)
-                {
-                    Resync = true;
-                    ResetTrackingRequested = false;
-                }
+                AnyReports++;
 
-                for (int i = 0; i < NumEncoders; i++)
+                if (id == ReportIdPositions && data.Length >= 22)
                 {
-                    int val = BitConverter.ToInt32(data, 1 + i * 4);
-                    if (!Resync)
-                    {
-                        int delta = val - PrevPositions[i];
-                        if (delta != 0)
-                        {
-                            LastDelta[i] = delta;
-                            if (delta > 0) CwUpdates[i]++;
-                            else CcwUpdates[i]++;
-                        }
-                    }
-                    PrevPositions[i] = val;
-                    Positions[i] = val;
+                    PosReports++;
+                    HandlePositionReport(data);
                 }
-
-                byte buttons = data[17];   // payload offset 16
-                if (!Resync)
+                else if (id == ReportIdConfig && data.Length >= FullConfigSize + 1)
                 {
-                    for (int i = 0; i < NumEncoders; i++)
-                    {
-                        bool was = (PrevButtons & (1 << i)) != 0;
-                        bool now = (buttons & (1 << i)) != 0;
-                        if (now && !was) BtnPresses[i]++;   // count rising edges (press)
-                    }
+                    CfgReports++;
+                    // Config payload starts at data[1]: [version][globalflags] then
+                    // 4 x 26-byte encoder blocks (min,max,step int32 first).
+                    CfgVersion = data[1];
+                    Enc1Min = BitConverter.ToInt32(data, 1 + 2 + 0);
+                    Enc1Max = BitConverter.ToInt32(data, 1 + 2 + 4);
+                    Enc1Step = BitConverter.ToInt32(data, 1 + 2 + 8);
+                    ConfigReceived = true;
                 }
-                PrevButtons = buttons;
-                ButtonStates = buttons;
-                TierByte = data[18];        // payload offset 17
-
-                Resync = false;
+                else
+                {
+                    LastUnknownId = id;
+                }
             }
         }
+    }
+
+    // Caller holds Lock.
+    private static void HandlePositionReport(byte[] data)
+    {
+        if (ResetTrackingRequested)
+        {
+            Resync = true;
+            ResetTrackingRequested = false;
+        }
+
+        for (int i = 0; i < NumEncoders; i++)
+        {
+            int val = BitConverter.ToInt32(data, 1 + i * 4);
+            if (!Resync)
+            {
+                int delta = val - PrevPositions[i];
+                if (delta != 0)
+                {
+                    LastDelta[i] = delta;
+                    if (delta > 0) CwUpdates[i]++;
+                    else CcwUpdates[i]++;
+                }
+            }
+            PrevPositions[i] = val;
+            Positions[i] = val;
+        }
+
+        byte buttons = data[17];   // payload offset 16
+        if (!Resync)
+        {
+            for (int i = 0; i < NumEncoders; i++)
+            {
+                bool was = (PrevButtons & (1 << i)) != 0;
+                bool now = (buttons & (1 << i)) != 0;
+                if (now && !was) BtnPresses[i]++;   // count rising edges (press)
+            }
+        }
+        PrevButtons = buttons;
+        ButtonStates = buttons;
+        TierByte = data[18];        // payload offset 17
+
+        Resync = false;
     }
 
     private static void UiLoop(HidDevice device, int vid, int pid, CancellationTokenSource cts)
     {
         Console.Clear();
+        var linkRetry = Stopwatch.StartNew();
+
         while (!cts.IsCancellationRequested)
         {
             if (!device.IsConnected)
@@ -191,6 +240,15 @@ internal static class Program
                 Console.SetCursorPosition(0, 0);
                 Console.WriteLine("Device disconnected.".PadRight(LineWidth));
                 return;
+            }
+
+            // Keep re-probing the link until the device replies (covers a dropped first packet).
+            bool gotConfig;
+            lock (Lock) { gotConfig = ConfigReceived; }
+            if (!gotConfig && linkRetry.ElapsedMilliseconds > 1000)
+            {
+                SendCommand(CmdReadConfig);
+                linkRetry.Restart();
             }
 
             while (Console.KeyAvailable)
@@ -213,6 +271,9 @@ internal static class Program
                             Array.Clear(LastDelta);
                         }
                         break;
+                    case ConsoleKey.C:
+                        SendCommand(CmdReadConfig);
+                        break;
                     case ConsoleKey.Z:
                         lock (Lock)
                         {
@@ -232,7 +293,8 @@ internal static class Program
 
     private static void Render(int vid, int pid)
     {
-        int[] pos; int[] dl; long[] cw; long[] ccw; long[] bp; byte btn, tier; long rc;
+        int[] pos; int[] dl; long[] cw; long[] ccw; long[] bp; byte btn, tier;
+        long posRep, cfgRep, anyRep; bool cfgOk; byte cfgVer, unkId; int e1Min, e1Max, e1Step;
         lock (Lock)
         {
             pos = (int[])Positions.Clone();
@@ -242,14 +304,24 @@ internal static class Program
             bp = (long[])BtnPresses.Clone();
             btn = ButtonStates;
             tier = TierByte;
-            rc = ReportCount;
+            posRep = PosReports; cfgRep = CfgReports; anyRep = AnyReports;
+            cfgOk = ConfigReceived; cfgVer = CfgVersion; unkId = LastUnknownId;
+            e1Min = Enc1Min; e1Max = Enc1Max; e1Step = Enc1Step;
         }
 
         var sb = new StringBuilder();
         void Row(string s) => sb.Append(s.Length >= LineWidth ? s[..LineWidth] : s.PadRight(LineWidth)).Append('\n');
 
-        Row($"RotaryUsb Encoder Monitor   VID:0x{vid:X4} PID:0x{pid:X4}   reports:{rc}");
+        Row($"RotaryUsb Encoder Monitor   VID:0x{vid:X4} PID:0x{pid:X4}");
         Row(new string('=', LineWidth));
+        // Device-link probe line — the key diagnostic.
+        if (cfgOk)
+            Row($"  DEVICE LINK: OK  (config v{cfgVer}, Enc1 range {e1Min}..{e1Max} step {e1Step})");
+        else
+            Row("  DEVICE LINK: *** NO REPLY YET *** (sent READ_CONFIG; retrying every 1s)");
+        Row($"  reports rx -> positions:{posRep}   config:{cfgRep}   total:{anyRep}"
+            + (unkId != 0 ? $"   (saw unknown id 0x{unkId:X2})" : ""));
+        Row(new string('-', LineWidth));
         Row("  Enc        Value     LastD   Dir    CW    CCW    Button    Presses");
         Row(new string('-', LineWidth));
         for (int i = 0; i < NumEncoders; i++)
@@ -265,8 +337,8 @@ internal static class Program
         Row(new string('-', LineWidth));
         Row($"  raw: buttons=0x{btn:X2}  tier=0x{tier:X2}");
         Row("");
-        Row("  Default config is range 0-100 step 1 -> Values clamp at 0/100 (normal).");
-        Row("  [R] reset positions   [Z] zero counters   [Q/Esc] quit");
+        Row("  Idle = all zeros (device only reports on change) — that's normal.");
+        Row("  [R] reset positions   [C] re-probe link   [Z] zero counters   [Q] quit");
 
         try
         {
