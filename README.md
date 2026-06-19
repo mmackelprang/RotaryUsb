@@ -164,6 +164,94 @@ block-beta
     gnd --> e4
 ```
 
+### Wiring Diagram — CYT1100 → Pico (pin-accurate)
+
+> **CYT1100 (bare EC11):** the 3-pin side is **A — C — B** (the **center pin C is the
+> common**); the 2-pin side is an **independent push switch (S1/S2)**. Each encoder
+> therefore needs **two ground wires** — its center **C** *and* one switch terminal
+> **S2** — both to the GND rail. A and B may be swapped (that only flips CW/CCW, and
+> is fixable with the per-encoder *Reverse* option). No resistors or "+/VCC" wire are
+> needed; the Pico's internal pull-ups hold each input HIGH.
+
+```mermaid
+flowchart LR
+    %% CYT1100: A C B on the 3-pin rotary side; S1 S2 = independent push switch
+    subgraph E1["Encoder 1 (CYT1100)"]
+        direction LR
+        E1A["A (CLK)"]
+        E1B["B (DT)"]
+        E1C["C center = common"]
+        E1S1["SW S1"]
+        E1S2["SW S2"]
+    end
+    subgraph E2["Encoder 2 (CYT1100)"]
+        direction LR
+        E2A["A (CLK)"]
+        E2B["B (DT)"]
+        E2C["C center = common"]
+        E2S1["SW S1"]
+        E2S2["SW S2"]
+    end
+    subgraph E3["Encoder 3 (CYT1100)"]
+        direction LR
+        E3A["A (CLK)"]
+        E3B["B (DT)"]
+        E3C["C center = common"]
+        E3S1["SW S1"]
+        E3S2["SW S2"]
+    end
+    subgraph E4["Encoder 4 (CYT1100)"]
+        direction LR
+        E4A["A (CLK)"]
+        E4B["B (DT)"]
+        E4C["C center = common"]
+        E4S1["SW S1"]
+        E4S2["SW S2"]
+    end
+
+    subgraph PICO["Raspberry Pi Pico (left header)"]
+        direction TB
+        GP2["GP2 - pin 4"]
+        GP3["GP3 - pin 5"]
+        GP4["GP4 - pin 6"]
+        GP5["GP5 - pin 7"]
+        GP6["GP6 - pin 9"]
+        GP7["GP7 - pin 10"]
+        GP8["GP8 - pin 11"]
+        GP9["GP9 - pin 12"]
+        GP10["GP10 - pin 14"]
+        GP11["GP11 - pin 15"]
+        GP12["GP12 - pin 16"]
+        GP13["GP13 - pin 17"]
+        GND{{"GND rail - pins 3 / 8 / 13 / 18"}}
+    end
+
+    E1A --- GP2
+    E1B --- GP3
+    E1S1 --- GP4
+    E2A --- GP5
+    E2B --- GP6
+    E2S1 --- GP7
+    E3A --- GP8
+    E3B --- GP9
+    E3S1 --- GP10
+    E4A --- GP11
+    E4B --- GP12
+    E4S1 --- GP13
+
+    E1C --- GND
+    E1S2 --- GND
+    E2C --- GND
+    E2S2 --- GND
+    E3C --- GND
+    E3S2 --- GND
+    E4C --- GND
+    E4S2 --- GND
+
+    classDef gndclass fill:#222,stroke:#000,color:#fff;
+    class GND gndclass;
+```
+
 ### Detailed Wiring Schematic
 
 ```
@@ -179,19 +267,19 @@ block-beta
   Enc1 DT   GP3  ───┤ 5                        36 ├─── 3V3 (OUT) ◄── Power for encoders
   Enc1 SW   GP4  ───┤ 6                        35 ├─── ADC_VREF
   Enc2 CLK  GP5  ───┤ 7                        34 ├─── GP28
-  Enc2 DT   GP6  ───┤ 8                        33 ├─── GND
-  Enc2 SW   GP7  ───┤ 9                        32 ├─── GP27
-  Enc3 CLK  GP8  ───┤ 10                       31 ├─── GP26
-  Enc3 DT   GP9  ───┤ 11                       30 ├─── RUN
-  Enc3 SW   GP10 ───┤ 12                       29 ├─── GP22
-  Enc4 CLK  GP11 ───┤ 13                       28 ├─── GND
-  Enc4 DT   GP12 ───┤ 14                       27 ├─── GP21
-  Enc4 SW   GP13 ───┤ 15                       26 ├─── GP20
-            GND  ───┤ 16                       25 ├─── GP19
-            GP14 ───┤ 17                       24 ├─── GP18
-            GP15 ───┤ 18                       23 ├─── GND
-            GP16 ───┤ 19                       22 ├─── GP17
-            GP17 ───┤ 20                       21 ├─── GP16
+            GND  ───┤ 8                        33 ├─── GND
+  Enc2 DT   GP6  ───┤ 9                        32 ├─── GP27
+  Enc2 SW   GP7  ───┤ 10                       31 ├─── GP26
+  Enc3 CLK  GP8  ───┤ 11                       30 ├─── RUN
+  Enc3 DT   GP9  ───┤ 12                       29 ├─── GP22
+            GND  ───┤ 13                       28 ├─── GND
+  Enc3 SW   GP10 ───┤ 14                       27 ├─── GP21
+  Enc4 CLK  GP11 ───┤ 15                       26 ├─── GP20
+  Enc4 DT   GP12 ───┤ 16                       25 ├─── GP19
+  Enc4 SW   GP13 ───┤ 17                       24 ├─── GP18
+            GND  ───┤ 18                       23 ├─── GND
+            GP14 ───┤ 19                       22 ├─── GP17
+            GP15 ───┤ 20                       21 ├─── GP16
                     └─────────────────────────────┘
 
                ENCODER TYPE A: KY-040 MODULE (5-pin PCB)
