@@ -28,7 +28,9 @@ This directory contains CircuitPython firmware for reading 4 rotary encoders wit
 
 - Raspberry Pi Pico (or Pico W)
 - 4× rotary encoders with push‑button — either type:
-  - **[KY‑040 modules](https://www.amazon.com/Cylewet-Encoder-15%C3%9716-5-Arduino-CYT1062/dp/B06XQTHDRR)** (5‑pin PCB with onboard pull‑ups)
+  - **KY‑040 modules** (5‑pin PCB with onboard pull‑ups) —
+    [Cylewet CYT1062 (5‑pack)](https://www.amazon.com/Cylewet-Encoder-15%C3%9716-5-Arduino-CYT1062/dp/B06XQTHDRR)
+    or [WMYCONGCONG (8‑pack)](https://www.amazon.com/gp/product/B07B68H6R8)
   - **[Bare encoders](https://www.amazon.com/Cylewet-Encoder-Digital-Potentiometer-Arduino/dp/B07DM2YMT4)** (3+2 pin, no PCB)
 - Breadboard and jumper wires
 - USB micro-B cable
@@ -37,14 +39,18 @@ This directory contains CircuitPython firmware for reading 4 rotary encoders wit
 
 **No external pull‑up resistors are needed** — the firmware enables Pico internal pull‑ups on all encoder pins.
 
+⚠️ **KY‑040 modules still need their “+” pin wired to 3V3 (Pin 36).** The module’s own 10 kΩ pull‑ups
+all reference that pin; floating it couples CLK/DT/SW together and causes missed detents and phantom
+button presses. See the [root README](../README.md#why-the-ky-040-plus-pin-must-be-connected).
+
 #### KY‑040 Module (5‑pin PCB)
 
-| Encoder | CLK → | DT → | SW → | + (VCC) | GND → |
-|---------|-------|------|------|---------|-------|
-| 1       | GP2   | GP3  | GP4  | NC (leave unconnected) | Pico GND |
-| 2       | GP5   | GP6  | GP7  | NC (leave unconnected) | Pico GND |
-| 3       | GP8   | GP9  | GP10 | NC (leave unconnected) | Pico GND |
-| 4       | GP11  | GP12 | GP13 | NC (leave unconnected) | Pico GND |
+| Encoder | CLK → | DT → | SW → | + (VCC) → | GND → |
+|---------|-------|------|------|-----------|-------|
+| 1       | GP2   | GP3  | GP4  | Pico 3V3 (Pin 36) | Pico GND |
+| 2       | GP5   | GP6  | GP7  | Pico 3V3 (Pin 36) | Pico GND |
+| 3       | GP8   | GP9  | GP10 | Pico 3V3 (Pin 36) | Pico GND |
+| 4       | GP11  | GP12 | GP13 | Pico 3V3 (Pin 36) | Pico GND |
 
 #### Bare Encoder (3+2 pin, no PCB)
 
@@ -57,7 +63,7 @@ This directory contains CircuitPython firmware for reading 4 rotary encoders wit
 
 **Notes:**
 - All encoder GND/common pins connect to Pico GND
-- For KY‑040 modules: leave the + (VCC) pin unconnected — Pico internal pull‑ups provide the HIGH reference
+- For KY‑040 modules: connect the + (VCC) pin to Pico 3V3 (Pin 36) — required, the onboard pull‑ups reference it
 - For bare encoders: the center pin on the 3‑pin side is common ground; one push‑button pin goes to GPIO, the other to GND
 - Do NOT connect any encoder pin to 5V (VBUS) as this could damage GPIO pins
 
@@ -237,6 +243,10 @@ Config is saved to `config.bin` on the CIRCUITPY filesystem. On boot, the device
 
 ### Erratic Behavior / Double Events
 
+- **KY‑040 users: check the “+” pin is wired to 3V3 (Pin 36), not left floating.** A floating “+” is
+  the most common cause of jitter, missed detents, and a button that appears pressed whenever the
+  knob turns. See [why](../README.md#why-the-ky-040-plus-pin-must-be-connected).
 - Increase `BUTTON_DEBOUNCE_TIME` for buttons
 - Check for loose connections
-- Some encoders have different detent counts - adjust the `steps` threshold (default: 4) in `update()` method if needed
+- Some encoders have different detent counts - adjust `STEPS_PER_DETENT` (default: 4, correct for
+  KY‑040; many bare EC11 encoders are half-cycle and need 2)
