@@ -13,13 +13,15 @@
  * HID REPORT FORMAT:
  *   Input Report ID 0x01 (21 bytes): Encoder positions + buttons + tiers
  *   Input Report ID 0x02 (106 bytes): Config readback
+ *   Input Report ID 0x04 (56 bytes): Decoder diagnostics, 10 Hz
  *   Output Report ID 0x02 (106 bytes): Config write
  *   Output Report ID 0x03 (2 bytes): Device commands
  *
  * BUILD INSTRUCTIONS:
- *   1. Rename this file to main.cpp (backup the original)
- *   2. Rebuild the firmware: cmake .. && make
- *   3. Flash the resulting .uf2 file to the Pico
+ *   1. cd firmware-cpp && mkdir -p build && cd build
+ *   2. cmake ..            (generic_hid is the default; -DFIRMWARE_MODE=keyboard for main.cpp)
+ *   3. make -j4
+ *   4. Flash the resulting rotary_usb.uf2 to the Pico
  */
 
 #include <cstdio>
