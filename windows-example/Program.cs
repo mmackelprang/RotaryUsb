@@ -347,14 +347,15 @@ public class Program
 
         try
         {
-            device.OpenDevice();
+            device.OpenDevice(DeviceMode.Overlapped, DeviceMode.Overlapped, ShareMode.ShareRead | ShareMode.ShareWrite);
             if (!device.IsConnected)
             {
                 Console.WriteLine("ERROR: Failed to open device.");
                 return;
             }
 
-            device.MonitorDeviceEvents = true;
+            try { device.MonitorDeviceEvents = true; }
+            catch (PlatformNotSupportedException) { /* WMI not available */ }
 
             // Request current config from device
             Console.WriteLine("Reading config from device...");
