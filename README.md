@@ -19,13 +19,13 @@ RotaryUsb supports two HID modes:
 | **Keyboard HID** | Sends F1-F12 key events | Quick setup, works with any app |
 | **Generic HID** | Sends raw encoder data | Custom applications, precise control |
 
-#### Keyboard HID Mode (Default)
+#### Keyboard HID Mode
 - Device appears as a standard USB keyboard
 - Encoder events trigger F1-F12 key presses  
 - Works immediately with any application that accepts keyboard input
 - Keys are sent globally (all applications receive them)
 
-#### Generic HID Mode (Advanced)
+#### Generic HID Mode (Default for the C++ firmware)
 - Device uses vendor-defined HID (Usage Page 0xFF00)
 - Applications read raw encoder position and button states directly
 - Events are exclusive to applications that open the device
@@ -66,9 +66,19 @@ RotaryUsb supports two HID modes:
    ```
 3. Hold BOOTSEL, connect Pico via USB, copy `rotary_usb.uf2` to the `RPI-RP2` drive
 
-**For Generic HID Mode (C++):**
-1. Backup `main.cpp` and replace it with `main_generic_hid.cpp`
-2. Rebuild and flash
+**Selecting the firmware mode (C++):**
+
+> **⚠️ The default changed.** A bare `cmake ..` used to build **Keyboard HID**. It now builds
+> **Generic HID**. If you were relying on the old default, pass `-DFIRMWARE_MODE=keyboard`.
+
+```bash
+cmake -DFIRMWARE_MODE=generic_hid ..   # default: vendor HID, runtime config, diagnostics
+cmake -DFIRMWARE_MODE=keyboard ..      # F1-F12 keyboard HID
+```
+
+The old "backup `main.cpp` and replace it with `main_generic_hid.cpp`" step is gone — never copy
+files to switch modes. CMake caches `FIRMWARE_MODE`, so re-run `cmake` with the flag to switch;
+plain `make` keeps the cached mode. The configure step prints which mode it selected.
 
 ### Windows Example
 
