@@ -75,11 +75,30 @@ struct PositionReport {
 
 static_assert(sizeof(PositionReport) == 21, "PositionReport must be 21 bytes");
 
+// Input Report ID 0x04: decoder diagnostics (56 bytes)
+//
+// Non-destructive companion to Report ID 0x01. This ships in the normal build —
+// there is deliberately no separate "diagnostic firmware", because a variant build
+// is exactly how the decoder output got silently replaced by pin state before.
+//
+// Offsets below are payload bytes, after the Report ID byte.
+struct DiagReport {
+    uint8_t  raw_pins[NUM_ENCODERS];        // 0-3   (A<<2)|(B<<1)|SW, literal levels, idle = 7
+    uint8_t  steps_per_detent;              // 4     threshold the decoder is actually using
+    uint8_t  reserved[3];                   // 5-7   0x00; keeps the uint32 arrays 4-byte aligned
+    uint32_t edge_count[NUM_ENCODERS];      // 8-23  observed A/B state changes
+    uint32_t invalid_count[NUM_ENCODERS];   // 24-39 illegal transitions (a subset of edge_count)
+    uint32_t detent_count[NUM_ENCODERS];    // 40-55 detents the decoder emitted
+} __attribute__((packed));
+
+static_assert(sizeof(DiagReport) == 56, "DiagReport must be 56 bytes");
+
 // Command codes (Output Report ID 0x03)
 static constexpr uint8_t CMD_SAVE_CONFIG     = 0x01;
 static constexpr uint8_t CMD_RESET_DEFAULTS  = 0x02;
 static constexpr uint8_t CMD_RESET_POSITIONS = 0x03;
 static constexpr uint8_t CMD_READ_CONFIG     = 0x04;
+static constexpr uint8_t CMD_RESET_DIAG      = 0x05;
 
 // ============================================================================
 // FACTORY DEFAULTS
@@ -314,6 +333,15 @@ static const uint8_t hid_report_descriptor[] = {
     0x75, 0x08,        //   Report Size (8 bits)
     0x95, 0x02,        //   Report Count (2 bytes)
     0x91, 0x02,        //   Output (Data, Variable, Absolute)
+
+    // ---- Input Report ID 0x04: Decoder Diagnostics (56 bytes) ----
+    0x85, 0x04,        //   Report ID (4)
+    0x09, 0x08,        //   Usage (Vendor Usage 8 - Decoder Diagnostics)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  //   Logical Maximum (255)
+    0x75, 0x08,        //   Report Size (8 bits)
+    0x95, 0x38,        //   Report Count (56 bytes)
+    0x81, 0x02,        //   Input (Data, Variable, Absolute)
 
     0xC0               // End Collection
 };
@@ -573,6 +601,7 @@ static GenericHidEncoder* encoders[NUM_ENCODERS];
 // Report state
 static PositionReport current_report;
 static PositionReport last_report;
+static DiagReport diag_report;
 static bool pending_config_readback = false;
 static bool pending_save = false;
 
@@ -704,6 +733,11 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
             printf("All positions reset\n");
         } else if (command == CMD_READ_CONFIG) {
             pending_config_readback = true;
+        } else if (command == CMD_RESET_DIAG) {
+            for (size_t i = 0; i < NUM_ENCODERS; i++) {
+                encoders[i]->reset_diagnostics();
+            }
+            printf("Diagnostic counters reset\n");
         }
     }
 }
@@ -737,6 +771,10 @@ static void encoder_poll_task() {
     cached_button_states = button_states;
 }
 
+// Diagnostic heartbeat cadence. 10 Hz x 57 bytes on the wire is ~570 B/s, which is
+// negligible on a full-speed interrupt endpoint.
+static constexpr uint32_t DIAG_INTERVAL_MS = 100;
+
 static void hid_task() {
     const uint32_t interval_ms = 10;
     static uint32_t start_ms = 0;
@@ -768,6 +806,25 @@ static void hid_task() {
     if (memcmp(&current_report, &last_report, sizeof(PositionReport)) != 0) {
         tud_hid_report(1, &current_report, sizeof(PositionReport));
         memcpy(&last_report, &current_report, sizeof(PositionReport));
+        return;  // One report per interval
+    }
+
+    // Diagnostics (ID 0x04) are lowest priority: a position change defers the
+    // heartbeat by one 10 ms tick. Positions only change on detents, so the 10 Hz
+    // cadence holds in practice.
+    static uint32_t diag_ms = 0;
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (now_ms - diag_ms >= DIAG_INTERVAL_MS) {
+        diag_ms = now_ms;
+        for (size_t i = 0; i < NUM_ENCODERS; i++) {
+            diag_report.raw_pins[i]      = encoders[i]->read_raw_pins();
+            diag_report.edge_count[i]    = encoders[i]->get_edge_count();
+            diag_report.invalid_count[i] = encoders[i]->get_invalid_count();
+            diag_report.detent_count[i]  = encoders[i]->get_detent_count();
+        }
+        diag_report.steps_per_detent = (uint8_t)encoders[0]->get_steps_per_detent();
+        memset(diag_report.reserved, 0, sizeof(diag_report.reserved));
+        tud_hid_report(4, &diag_report, sizeof(DiagReport));
     }
 }
 
