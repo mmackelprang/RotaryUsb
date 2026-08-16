@@ -358,6 +358,9 @@ public:
         , button_pressed_(false)
         , debounce_start_(0)
         , debounce_active_(false)
+        , edge_count_(0)
+        , invalid_count_(0)
+        , detent_count_(0)
     {}
 
     void init() {
@@ -398,6 +401,33 @@ public:
     int32_t get_position() const { return position_; }
     uint8_t get_active_tier() const { return active_tier_; }
 
+    // ---- Decoder diagnostics (Input Report ID 0x04) ----
+
+    uint32_t get_edge_count()       const { return edge_count_; }
+    uint32_t get_invalid_count()    const { return invalid_count_; }
+    uint32_t get_detent_count()     const { return detent_count_; }
+    int8_t   get_steps_per_detent() const { return steps_per_detent_; }
+
+    void reset_diagnostics() {
+        edge_count_ = 0;
+        invalid_count_ = 0;
+        detent_count_ = 0;
+    }
+
+    // Literal GPIO levels, NOT inverted: (A<<2)|(B<<1)|SW.
+    // With internal pull-ups and nothing pressed this reads 7 (0b111); a held
+    // button clears bit 0 giving 6.
+    //
+    // WARNING: this is the opposite convention from the private read_ab_state()
+    // below, which inverts to active-high for the quadrature transition table.
+    // Two readers, two conventions, on purpose. Do not substitute one for the other.
+    uint8_t read_raw_pins() const {
+        uint8_t a  = gpio_get(pin_a_)  ? 1 : 0;
+        uint8_t b  = gpio_get(pin_b_)  ? 1 : 0;
+        uint8_t sw = gpio_get(pin_sw_) ? 1 : 0;
+        return (uint8_t)((a << 2) | (b << 1) | sw);
+    }
+
     bool update() {
         if (!config_) return button_pressed_;
 
@@ -405,6 +435,8 @@ public:
         uint8_t current_ab_state = read_ab_state();
 
         if (current_ab_state != last_ab_state_) {
+            edge_count_++;
+
             uint8_t index = (last_ab_state_ << 2) | current_ab_state;
             int8_t direction = TRANSITION_TABLE[index];
 
@@ -413,6 +445,11 @@ public:
                 steps_ += direction;
 
                 if (steps_ >= steps_per_detent_ || steps_ <= -steps_per_detent_) {
+                    // Counted before the position math, so clamping at min_value or
+                    // max_value does not hide emitted detents. Counting works from
+                    // anywhere in the range, in either direction.
+                    detent_count_++;
+
                     int8_t detent_direction = (steps_ > 0) ? 1 : -1;
                     steps_ = 0;
 
@@ -440,6 +477,13 @@ public:
                            (long)position_, active_tier_);
                 }
             } else {
+                // TRANSITION_TABLE yields 0 here only for a simultaneous A+B change
+                // (indices 3, 6, 9, 12) — the last==current entries (0, 5, 10, 15)
+                // are already excluded by the enclosing if. A simultaneous change is
+                // physically impossible in clean quadrature, so this counts contact
+                // bounce, a marginal connection, or a missed poll. Never a decoder
+                // logic error.
+                invalid_count_++;
                 steps_ = 0;
             }
 
@@ -472,6 +516,9 @@ public:
     }
 
 private:
+    // Inverted to active-high (pins are active-low with pull-ups) because the
+    // quadrature TRANSITION_TABLE is indexed in that space. See read_raw_pins()
+    // above for the uninverted view used by diagnostics.
     uint8_t read_ab_state() {
         uint8_t a_val = gpio_get(pin_a_) ? 0 : 1;
         uint8_t b_val = gpio_get(pin_b_) ? 0 : 1;
@@ -500,6 +547,14 @@ private:
     bool button_pressed_;
     uint32_t debounce_start_;
     bool debounce_active_;
+
+    // Decoder diagnostics. Monotonic totals across both directions; the host
+    // zeroes them via Output Report ID 0x03, command CMD_RESET_DIAG.
+    // uint32 rather than uint16: at a sustained 80 edges/sec a uint16 wraps in
+    // about 13 minutes, which is inside a plausible debugging session.
+    uint32_t edge_count_;
+    uint32_t invalid_count_;
+    uint32_t detent_count_;
 
     static constexpr uint32_t BUTTON_DEBOUNCE_US = 20000;  // 20ms
     static const int8_t TRANSITION_TABLE[16];
