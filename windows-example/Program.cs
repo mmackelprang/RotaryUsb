@@ -703,7 +703,7 @@ public class Program
 
                 WriteLinePadded($"Firmware steps/detent: {spd}   (GlobalFlags bit 0 = {globalFlags & 0x01})   {ageNote}");
                 WriteLinePadded("");
-                WriteLinePadded("Enc    A  B  SW       Edges   Invalid   Detents   Edges/Detent");
+                WriteLinePadded("Enc    A  B  SW         Edges   Invalid   Detents   Edges/Detent");
                 for (int i = 0; i < NUM_ENCODERS; i++)
                 {
                     int a = (rawPins[i] >> 2) & 1;
