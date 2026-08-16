@@ -544,8 +544,9 @@ public class Program
             Console.WriteLine();
             Console.WriteLine("[M] Monitor - Live display of encoder values");
             Console.WriteLine("[C] Configure encoder");
+            Console.WriteLine("[D] Diagnostics - Decoder counters and raw pin state");
             Console.WriteLine("[S] Save config to device flash");
-            Console.WriteLine("[D] Reset to defaults");
+            Console.WriteLine("[F] Factory reset (restore default config)");
             Console.WriteLine("[R] Reset positions");
             Console.WriteLine("[Q] Quit");
             Console.Write("\nChoice: ");
@@ -565,8 +566,11 @@ public class Program
                     Thread.Sleep(1000);
                     break;
                 case 'D':
+                    RunDiagnostics(device, cts.Token);
+                    break;
+                case 'F':
                     SendCommand(CMD_RESET_DEFAULTS);
-                    Console.WriteLine("\nReset to defaults command sent.");
+                    Console.WriteLine("\nFactory reset command sent.");
                     Thread.Sleep(500);
                     SendCommand(CMD_READ_CONFIG);
                     Thread.Sleep(500);
@@ -627,6 +631,138 @@ public class Program
 
         if (Console.KeyAvailable)
             Console.ReadKey(true); // consume the key
+    }
+
+    // ========================================================================
+    // DECODER DIAGNOSTICS
+    // ========================================================================
+
+    private static void WriteLinePadded(string s) => Console.WriteLine(s.PadRight(78));
+
+    private static void RunDiagnostics(HidDevice device, CancellationToken ct)
+    {
+        Console.Clear();
+        bool? lastHadData = null;
+
+        while (!ct.IsCancellationRequested && device.IsConnected)
+        {
+            bool everSeen;
+            DateTime lastSeen;
+            byte spd;
+            byte globalFlags;
+            var rawPins = new byte[NUM_ENCODERS];
+            var edges = new uint[NUM_ENCODERS];
+            var invalid = new uint[NUM_ENCODERS];
+            var detents = new uint[NUM_ENCODERS];
+
+            lock (_lock)
+            {
+                lastSeen = _diagLastSeenUtc;
+                everSeen = _diagLastSeenUtc != DateTime.MinValue;
+                spd = _diagStepsPerDetent;
+                globalFlags = _deviceConfig.GlobalFlags;
+                Array.Copy(_diagRawPins, rawPins, NUM_ENCODERS);
+                Array.Copy(_diagEdgeCount, edges, NUM_ENCODERS);
+                Array.Copy(_diagInvalidCount, invalid, NUM_ENCODERS);
+                Array.Copy(_diagDetentCount, detents, NUM_ENCODERS);
+            }
+
+            // Only clear on a layout change; otherwise redraw in place to avoid flicker
+            // while the user is counting detents.
+            if (lastHadData != everSeen)
+            {
+                Console.Clear();
+                lastHadData = everSeen;
+            }
+            Console.SetCursorPosition(0, 0);
+
+            WriteLinePadded("Encoder Diagnostics");
+            WriteLinePadded("===================");
+            WriteLinePadded("");
+
+            if (!everSeen)
+            {
+                WriteLinePadded("No diagnostic reports received (Input Report ID 0x04).");
+                WriteLinePadded("");
+                WriteLinePadded("  * This firmware build may predate report ID 0x04 - reflash the");
+                WriteLinePadded("    .uf2 built from this branch.");
+                WriteLinePadded("  * Or the keyboard-HID personality was flashed; rebuild with");
+                WriteLinePadded("    cmake -DFIRMWARE_MODE=generic_hid ..");
+                WriteLinePadded("");
+                WriteLinePadded("Positions and config still work; only diagnostics are unavailable.");
+                WriteLinePadded("");
+                WriteLinePadded("");
+                WriteLinePadded("");
+            }
+            else
+            {
+                double ageSec = (DateTime.UtcNow - lastSeen).TotalSeconds;
+                string ageNote = ageSec > 2.0
+                    ? $"STALE - last report {ageSec:F1}s ago (device hung or unplugged?)"
+                    : $"updated {ageSec:F1}s ago";
+
+                WriteLinePadded($"Firmware steps/detent: {spd}   (GlobalFlags bit 0 = {globalFlags & 0x01})   {ageNote}");
+                WriteLinePadded("");
+                WriteLinePadded("Enc    A  B  SW       Edges   Invalid   Detents   Edges/Detent");
+                for (int i = 0; i < NUM_ENCODERS; i++)
+                {
+                    int a = (rawPins[i] >> 2) & 1;
+                    int b = (rawPins[i] >> 1) & 1;
+                    int sw = rawPins[i] & 1;
+                    string ratio = detents[i] > 0
+                        ? ((double)edges[i] / detents[i]).ToString("F2")
+                        : "n/a";
+                    WriteLinePadded($"  {i + 1}    {a}  {b}   {sw}   {edges[i],11}{invalid[i],10}{detents[i],10}{ratio,15}");
+                }
+                WriteLinePadded("");
+                WriteLinePadded("Raw pins are sampled at 10 Hz: expect 7 (A=1 B=1 SW=1) at rest, even");
+                WriteLinePadded("while spinning. Rotation shows up in the counters, not the pin bits.");
+            }
+
+            WriteLinePadded("");
+            WriteLinePadded("[Z] Zero counters    [T] Toggle steps/detent (4<->2)");
+            WriteLinePadded("[S] Save config to flash (persists the toggle)    [B] Back");
+
+            // Poll for a keypress for ~400ms, then redraw.
+            var deadline = DateTime.UtcNow.AddMilliseconds(400);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(true);
+                    switch (char.ToUpper(key.KeyChar))
+                    {
+                        case 'Z':
+                            SendCommand(CMD_RESET_DIAG);
+                            Thread.Sleep(200);
+                            break;
+                        case 'T':
+                            lock (_lock)
+                            {
+                                _deviceConfig.GlobalFlags ^= 0x01;
+                                SendConfig(_deviceConfig);
+                            }
+                            Thread.Sleep(200);
+                            SendCommand(CMD_READ_CONFIG);
+                            Thread.Sleep(300);
+                            // apply_config() does not reset the encoder's partial-step
+                            // accumulator, so the first detent after a switch can land
+                            // early or late by one. Zero the counters for a clean measurement.
+                            SendCommand(CMD_RESET_DIAG);
+                            Thread.Sleep(200);
+                            break;
+                        case 'S':
+                            SendCommand(CMD_SAVE_CONFIG);
+                            Thread.Sleep(500);
+                            break;
+                        case 'B':
+                            return;
+                    }
+                    break;
+                }
+                Thread.Sleep(25);
+            }
+        }
     }
 
     // ========================================================================
