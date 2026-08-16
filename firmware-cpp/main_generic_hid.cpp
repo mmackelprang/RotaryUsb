@@ -753,6 +753,16 @@ int main() {
     printf("All encoders initialized. Starting main loop...\n");
     printf("----------------------------------------\n");
 
+    // Onboard-LED heartbeat at 2 Hz: proves the main loop is alive even when USB
+    // reporting is broken, which is the first thing you want to know when the host
+    // sees nothing. (Pico W defines no PICO_DEFAULT_LED_PIN, so this is skipped there.)
+#ifdef PICO_DEFAULT_LED_PIN
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    uint32_t led_ms = 0;
+    bool led_on = false;
+#endif
+
     while (true) {
         tud_task();
 
@@ -764,6 +774,15 @@ int main() {
 
         encoder_poll_task();
         hid_task();
+
+#ifdef PICO_DEFAULT_LED_PIN
+        uint32_t led_now = to_ms_since_boot(get_absolute_time());
+        if (led_now - led_ms >= 250) {
+            led_ms = led_now;
+            led_on = !led_on;
+            gpio_put(PICO_DEFAULT_LED_PIN, led_on);
+        }
+#endif
     }
 
     return 0;
