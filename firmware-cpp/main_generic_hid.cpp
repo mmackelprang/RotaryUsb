@@ -13,13 +13,15 @@
  * HID REPORT FORMAT:
  *   Input Report ID 0x01 (21 bytes): Encoder positions + buttons + tiers
  *   Input Report ID 0x02 (106 bytes): Config readback
+ *   Input Report ID 0x04 (56 bytes): Decoder diagnostics, 10 Hz
  *   Output Report ID 0x02 (106 bytes): Config write
  *   Output Report ID 0x03 (2 bytes): Device commands
  *
  * BUILD INSTRUCTIONS:
- *   1. Rename this file to main.cpp (backup the original)
- *   2. Rebuild the firmware: cmake .. && make
- *   3. Flash the resulting .uf2 file to the Pico
+ *   1. cd firmware-cpp && mkdir -p build && cd build
+ *   2. cmake ..            (generic_hid is the default; -DFIRMWARE_MODE=keyboard for main.cpp)
+ *   3. make -j4
+ *   4. Flash the resulting rotary_usb.uf2 to the Pico
  */
 
 #include <cstdio>
@@ -75,11 +77,30 @@ struct PositionReport {
 
 static_assert(sizeof(PositionReport) == 21, "PositionReport must be 21 bytes");
 
+// Input Report ID 0x04: decoder diagnostics (56 bytes)
+//
+// Non-destructive companion to Report ID 0x01. This ships in the normal build —
+// there is deliberately no separate "diagnostic firmware", because a variant build
+// is exactly how the decoder output got silently replaced by pin state before.
+//
+// Offsets below are payload bytes, after the Report ID byte.
+struct DiagReport {
+    uint8_t  raw_pins[NUM_ENCODERS];        // 0-3   (A<<2)|(B<<1)|SW, literal levels, idle = 7
+    uint8_t  steps_per_detent;              // 4     threshold the decoder is actually using
+    uint8_t  reserved[3];                   // 5-7   0x00; keeps the uint32 arrays 4-byte aligned
+    uint32_t edge_count[NUM_ENCODERS];      // 8-23  observed A/B state changes
+    uint32_t invalid_count[NUM_ENCODERS];   // 24-39 illegal transitions (a subset of edge_count)
+    uint32_t detent_count[NUM_ENCODERS];    // 40-55 detents the decoder emitted
+} __attribute__((packed));
+
+static_assert(sizeof(DiagReport) == 56, "DiagReport must be 56 bytes");
+
 // Command codes (Output Report ID 0x03)
 static constexpr uint8_t CMD_SAVE_CONFIG     = 0x01;
 static constexpr uint8_t CMD_RESET_DEFAULTS  = 0x02;
 static constexpr uint8_t CMD_RESET_POSITIONS = 0x03;
 static constexpr uint8_t CMD_READ_CONFIG     = 0x04;
+static constexpr uint8_t CMD_RESET_DIAG      = 0x05;
 
 // ============================================================================
 // FACTORY DEFAULTS
@@ -315,6 +336,15 @@ static const uint8_t hid_report_descriptor[] = {
     0x95, 0x02,        //   Report Count (2 bytes)
     0x91, 0x02,        //   Output (Data, Variable, Absolute)
 
+    // ---- Input Report ID 0x04: Decoder Diagnostics (56 bytes) ----
+    0x85, 0x04,        //   Report ID (4)
+    0x09, 0x08,        //   Usage (Vendor Usage 8 - Decoder Diagnostics)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  //   Logical Maximum (255)
+    0x75, 0x08,        //   Report Size (8 bits)
+    0x95, 0x38,        //   Report Count (56 bytes)
+    0x81, 0x02,        //   Input (Data, Variable, Absolute)
+
     0xC0               // End Collection
 };
 
@@ -358,6 +388,9 @@ public:
         , button_pressed_(false)
         , debounce_start_(0)
         , debounce_active_(false)
+        , edge_count_(0)
+        , invalid_count_(0)
+        , detent_count_(0)
     {}
 
     void init() {
@@ -398,6 +431,33 @@ public:
     int32_t get_position() const { return position_; }
     uint8_t get_active_tier() const { return active_tier_; }
 
+    // ---- Decoder diagnostics (Input Report ID 0x04) ----
+
+    uint32_t get_edge_count()       const { return edge_count_; }
+    uint32_t get_invalid_count()    const { return invalid_count_; }
+    uint32_t get_detent_count()     const { return detent_count_; }
+    int8_t   get_steps_per_detent() const { return steps_per_detent_; }
+
+    void reset_diagnostics() {
+        edge_count_ = 0;
+        invalid_count_ = 0;
+        detent_count_ = 0;
+    }
+
+    // Literal GPIO levels, NOT inverted: (A<<2)|(B<<1)|SW.
+    // With internal pull-ups and nothing pressed this reads 7 (0b111); a held
+    // button clears bit 0 giving 6.
+    //
+    // WARNING: this is the opposite convention from the private read_ab_state()
+    // below, which inverts to active-high for the quadrature transition table.
+    // Two readers, two conventions, on purpose. Do not substitute one for the other.
+    uint8_t read_raw_pins() const {
+        uint8_t a  = gpio_get(pin_a_)  ? 1 : 0;
+        uint8_t b  = gpio_get(pin_b_)  ? 1 : 0;
+        uint8_t sw = gpio_get(pin_sw_) ? 1 : 0;
+        return (uint8_t)((a << 2) | (b << 1) | sw);
+    }
+
     bool update() {
         if (!config_) return button_pressed_;
 
@@ -405,6 +465,8 @@ public:
         uint8_t current_ab_state = read_ab_state();
 
         if (current_ab_state != last_ab_state_) {
+            edge_count_++;
+
             uint8_t index = (last_ab_state_ << 2) | current_ab_state;
             int8_t direction = TRANSITION_TABLE[index];
 
@@ -413,6 +475,11 @@ public:
                 steps_ += direction;
 
                 if (steps_ >= steps_per_detent_ || steps_ <= -steps_per_detent_) {
+                    // Counted before the position math, so clamping at min_value or
+                    // max_value does not hide emitted detents. Counting works from
+                    // anywhere in the range, in either direction.
+                    detent_count_++;
+
                     int8_t detent_direction = (steps_ > 0) ? 1 : -1;
                     steps_ = 0;
 
@@ -440,6 +507,13 @@ public:
                            (long)position_, active_tier_);
                 }
             } else {
+                // TRANSITION_TABLE yields 0 here only for a simultaneous A+B change
+                // (indices 3, 6, 9, 12) — the last==current entries (0, 5, 10, 15)
+                // are already excluded by the enclosing if. A simultaneous change is
+                // physically impossible in clean quadrature, so this counts contact
+                // bounce, a marginal connection, or a missed poll. Never a decoder
+                // logic error.
+                invalid_count_++;
                 steps_ = 0;
             }
 
@@ -472,6 +546,9 @@ public:
     }
 
 private:
+    // Inverted to active-high (pins are active-low with pull-ups) because the
+    // quadrature TRANSITION_TABLE is indexed in that space. See read_raw_pins()
+    // above for the uninverted view used by diagnostics.
     uint8_t read_ab_state() {
         uint8_t a_val = gpio_get(pin_a_) ? 0 : 1;
         uint8_t b_val = gpio_get(pin_b_) ? 0 : 1;
@@ -501,6 +578,14 @@ private:
     uint32_t debounce_start_;
     bool debounce_active_;
 
+    // Decoder diagnostics. Monotonic totals across both directions; the host
+    // zeroes them via Output Report ID 0x03, command CMD_RESET_DIAG.
+    // uint32 rather than uint16: at a sustained 80 edges/sec a uint16 wraps in
+    // about 13 minutes, which is inside a plausible debugging session.
+    uint32_t edge_count_;
+    uint32_t invalid_count_;
+    uint32_t detent_count_;
+
     static constexpr uint32_t BUTTON_DEBOUNCE_US = 20000;  // 20ms
     static const int8_t TRANSITION_TABLE[16];
 };
@@ -518,6 +603,7 @@ static GenericHidEncoder* encoders[NUM_ENCODERS];
 // Report state
 static PositionReport current_report;
 static PositionReport last_report;
+static DiagReport diag_report;
 static bool pending_config_readback = false;
 static bool pending_save = false;
 
@@ -649,6 +735,11 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
             printf("All positions reset\n");
         } else if (command == CMD_READ_CONFIG) {
             pending_config_readback = true;
+        } else if (command == CMD_RESET_DIAG) {
+            for (size_t i = 0; i < NUM_ENCODERS; i++) {
+                encoders[i]->reset_diagnostics();
+            }
+            printf("Diagnostic counters reset\n");
         }
     }
 }
@@ -682,6 +773,10 @@ static void encoder_poll_task() {
     cached_button_states = button_states;
 }
 
+// Diagnostic heartbeat cadence. 10 Hz x 57 bytes on the wire is ~570 B/s, which is
+// negligible on a full-speed interrupt endpoint.
+static constexpr uint32_t DIAG_INTERVAL_MS = 100;
+
 static void hid_task() {
     const uint32_t interval_ms = 10;
     static uint32_t start_ms = 0;
@@ -713,6 +808,25 @@ static void hid_task() {
     if (memcmp(&current_report, &last_report, sizeof(PositionReport)) != 0) {
         tud_hid_report(1, &current_report, sizeof(PositionReport));
         memcpy(&last_report, &current_report, sizeof(PositionReport));
+        return;  // One report per interval
+    }
+
+    // Diagnostics (ID 0x04) are lowest priority: a position change defers the
+    // heartbeat by one 10 ms tick. Positions only change on detents, so the 10 Hz
+    // cadence holds in practice.
+    static uint32_t diag_ms = 0;
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (now_ms - diag_ms >= DIAG_INTERVAL_MS) {
+        diag_ms = now_ms;
+        for (size_t i = 0; i < NUM_ENCODERS; i++) {
+            diag_report.raw_pins[i]      = encoders[i]->read_raw_pins();
+            diag_report.edge_count[i]    = encoders[i]->get_edge_count();
+            diag_report.invalid_count[i] = encoders[i]->get_invalid_count();
+            diag_report.detent_count[i]  = encoders[i]->get_detent_count();
+        }
+        diag_report.steps_per_detent = (uint8_t)encoders[0]->get_steps_per_detent();
+        memset(diag_report.reserved, 0, sizeof(diag_report.reserved));
+        tud_hid_report(4, &diag_report, sizeof(DiagReport));
     }
 }
 
@@ -753,6 +867,16 @@ int main() {
     printf("All encoders initialized. Starting main loop...\n");
     printf("----------------------------------------\n");
 
+    // Onboard-LED heartbeat at 2 Hz: proves the main loop is alive even when USB
+    // reporting is broken, which is the first thing you want to know when the host
+    // sees nothing. (Pico W defines no PICO_DEFAULT_LED_PIN, so this is skipped there.)
+#ifdef PICO_DEFAULT_LED_PIN
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    uint32_t led_ms = 0;
+    bool led_on = false;
+#endif
+
     while (true) {
         tud_task();
 
@@ -764,6 +888,15 @@ int main() {
 
         encoder_poll_task();
         hid_task();
+
+#ifdef PICO_DEFAULT_LED_PIN
+        uint32_t led_now = to_ms_since_boot(get_absolute_time());
+        if (led_now - led_ms >= 250) {
+            led_ms = led_now;
+            led_on = !led_on;
+            gpio_put(PICO_DEFAULT_LED_PIN, led_on);
+        }
+#endif
     }
 
     return 0;

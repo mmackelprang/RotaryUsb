@@ -2,24 +2,29 @@
 
 This directory contains a high-performance C++ firmware for the Raspberry Pi Pico that reads 4 rotary encoders with push buttons. Two modes are supported:
 
-| Mode | File | Description |
-|------|------|-------------|
-| **Keyboard HID** | `main.cpp` | Sends F1-F12 key events (default) |
-| **Generic HID** | `main_generic_hid.cpp` | Sends raw encoder data via vendor-defined HID |
+| Mode | `-DFIRMWARE_MODE=` | File | Description |
+|------|--------------------|------|-------------|
+| **Generic HID** | `generic_hid` (default) | `main_generic_hid.cpp` | Sends raw encoder data via vendor-defined HID |
+| **Keyboard HID** | `keyboard` | `main.cpp` | Sends F1-F12 key events |
+
+> **⚠️ The default changed.** A bare `cmake ..` used to build **Keyboard HID**. It now builds
+> **Generic HID**. If you were relying on the old default, pass `-DFIRMWARE_MODE=keyboard`.
+> The old `cp main_generic_hid.cpp main.cpp` step is gone — never copy files to switch modes.
 
 ## Choosing a Mode
 
-### Keyboard HID Mode (Default)
+### Generic HID Mode (Default)
+- Device uses vendor-defined HID (Usage Page 0xFF00)
+- Applications can read raw encoder position and button states directly
+- Runtime configurable, with decoder diagnostics on Input Report ID 0x04
+- Requires custom application code to read HID reports
+- Build with `cmake -DFIRMWARE_MODE=generic_hid ..` (or just `cmake ..`)
+
+### Keyboard HID Mode
 - Device appears as a standard USB keyboard
 - Encoder events trigger F1-F12 key presses
 - Works immediately with any application that accepts keyboard input
-- Build using the default `main.cpp`
-
-### Generic HID Mode
-- Device uses vendor-defined HID (Usage Page 0xFF00)
-- Applications can read raw encoder position and button states directly
-- Requires custom application code to read HID reports
-- To build: rename `main_generic_hid.cpp` to `main.cpp` (backup the original first)
+- Build with `cmake -DFIRMWARE_MODE=keyboard ..`
 
 ## Why C++?
 
@@ -317,12 +322,13 @@ if (steps_ >= 4) {  // Increase for less sensitive, decrease for more
 
 ```
 firmware-cpp/
-├── CMakeLists.txt      # Build configuration
-├── main.cpp            # Main program and USB HID implementation
-├── encoder.h           # Encoder class header
-├── encoder.cpp         # Encoder class implementation
-├── tusb_config.h       # TinyUSB configuration
-└── README.md           # This file
+├── CMakeLists.txt          # Build configuration; selects FIRMWARE_MODE
+├── main_generic_hid.cpp    # Generic HID entry point (default)
+├── main.cpp                # Keyboard HID entry point
+├── encoder.h               # Encoder class header
+├── encoder.cpp             # Encoder class implementation
+├── tusb_config.h           # TinyUSB configuration
+└── README.md               # This file
 ```
 
 ## License
@@ -333,20 +339,28 @@ Apache License 2.0
 
 ### Building Generic HID Firmware
 
-To build the Generic HID version instead of the Keyboard version:
+Generic HID is the default, so a plain build produces it:
 
 ```bash
-# Backup the original main.cpp
 cd firmware-cpp
-cp main.cpp main_keyboard.cpp
-
-# Use the Generic HID version
-cp main_generic_hid.cpp main.cpp
-
-# Build as normal
 mkdir -p build && cd build
 cmake ..
 make -j4
+```
+
+To build the Keyboard HID firmware instead:
+
+```bash
+cmake -DFIRMWARE_MODE=keyboard ..
+make -j4
+```
+
+CMake caches `FIRMWARE_MODE`, so plain `make` keeps whatever mode the build directory was
+configured with. Re-run `cmake` with the flag to switch. The configure step echoes the
+selection, so check the build log if you are unsure what you flashed:
+
+```
+-- RotaryUsb firmware mode: generic_hid (main_generic_hid.cpp)
 ```
 
 ### HID Report Format (Generic HID Mode)
@@ -388,8 +402,46 @@ Generic HID mode supports runtime configuration from the host application. The d
 |--------|-----------|------|-------------|
 | Input ID 0x01 | Device → Host | 21 bytes | Absolute positions + buttons + tiers |
 | Input ID 0x02 | Device → Host | 106 bytes | Config readback |
+| Input ID 0x04 | Device → Host | 56 bytes | Decoder diagnostics (10 Hz) |
 | Output ID 0x02 | Host → Device | 106 bytes | Full config write |
 | Output ID 0x03 | Host → Device | 2 bytes | Commands |
+
+#### Commands (Output Report ID 0x03, byte 0)
+
+| Code | Command | Effect |
+|------|---------|--------|
+| 0x01 | Save config | Write current config to flash |
+| 0x02 | Reset defaults | Restore factory config and reset positions |
+| 0x03 | Reset positions | Set every encoder position to its `min_value` |
+| 0x04 | Read config | Trigger an Input Report ID 0x02 readback |
+| 0x05 | Reset diagnostics | Zero all report ID 0x04 counters |
+
+#### Decoder Diagnostics (Input Report ID 0x04) — 56 bytes
+
+Sent at 10 Hz. Ships in the normal build; there is no separate diagnostic firmware.
+
+| Offset | Type | Description |
+|--------|------|-------------|
+| 0-3 | uint8[4] | Raw pin state per encoder: `(A<<2)\|(B<<1)\|SW`, literal GPIO levels. Idle = 7 |
+| 4 | uint8 | `steps_per_detent` the decoder is actively using (2 or 4) |
+| 5-7 | uint8[3] | Reserved (0x00) |
+| 8-23 | uint32[4] LE | Cumulative A/B state changes observed, per encoder |
+| 24-39 | uint32[4] LE | Cumulative illegal quadrature transitions (a subset of the above) |
+| 40-55 | uint32[4] LE | Cumulative detents emitted by the decoder |
+
+Counters are monotonic across both rotation directions and are zeroed by command 0x05.
+`detent_count` increments before position clamping, so it counts emitted detents even at
+`min_value` or `max_value`.
+
+**Interpreting the counters.** `edge_count / detent_count` only reports the firmware's own
+threshold back and does not identify the encoder. To measure the encoder, zero the counters, turn
+the knob a counted number of physical clicks, and divide: `edge_count / clicks` is 4 for a KY-040
+class encoder and 2 for a bare-EC11 class one. Check `invalid_count` first — contact bounce inflates
+`edge_count` and can make a 2-step encoder read as 4.
+
+**Raw pins are sampled at 10 Hz** and encoders rest at a detent with both contacts open, so this
+field reads 7 at rest even during a spin. It is for at-rest checks (idle 7, button press 6, stuck
+values); rotation shows up in the counters.
 
 #### Flash Persistence
 

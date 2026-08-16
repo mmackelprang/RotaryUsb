@@ -11,11 +11,36 @@ set(CMAKE_CXX_STANDARD 17)
 # Initialize the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# main.cpp is the active firmware entry point.
-# For Generic HID mode: copy main_generic_hid.cpp to main.cpp before building.
-# For Keyboard HID mode: use the original main.cpp (default).
+# Firmware personality. Both entry points share encoder.cpp and are mutually
+# exclusive — each defines its own main() and its own TinyUSB descriptor callbacks.
+#
+#   generic_hid -> main_generic_hid.cpp   vendor HID, runtime config, diagnostics
+#   keyboard    -> main.cpp               F1-F12 keyboard HID
+#
+# NOTE: the default changed from 'keyboard' to 'generic_hid'. A bare `cmake ..`
+# now builds the Generic HID firmware. This replaces the old (and error-prone)
+# "copy main_generic_hid.cpp over main.cpp" step.
+#
+# CMake caches this value, so switching modes means re-running cmake with the
+# flag — not passing it on every build:
+#     cmake -DFIRMWARE_MODE=keyboard ..
+set(FIRMWARE_MODE "generic_hid" CACHE STRING
+    "Firmware personality: generic_hid or keyboard")
+set_property(CACHE FIRMWARE_MODE PROPERTY STRINGS generic_hid keyboard)
+
+if(FIRMWARE_MODE STREQUAL "generic_hid")
+    set(FIRMWARE_MAIN main_generic_hid.cpp)
+elseif(FIRMWARE_MODE STREQUAL "keyboard")
+    set(FIRMWARE_MAIN main.cpp)
+else()
+    message(FATAL_ERROR
+        "FIRMWARE_MODE must be 'generic_hid' or 'keyboard', got '${FIRMWARE_MODE}'")
+endif()
+
+message(STATUS "RotaryUsb firmware mode: ${FIRMWARE_MODE} (${FIRMWARE_MAIN})")
+
 add_executable(rotary_usb
-    main.cpp
+    ${FIRMWARE_MAIN}
     encoder.cpp
 )
 
