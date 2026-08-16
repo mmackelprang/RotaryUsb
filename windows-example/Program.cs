@@ -37,12 +37,17 @@ public class Program
     private const byte REPORT_ID_POSITIONS = 0x01;
     private const byte REPORT_ID_CONFIG = 0x02;
     private const byte REPORT_ID_COMMAND = 0x03;
+    private const byte REPORT_ID_DIAG = 0x04;
+
+    // Input Report ID 0x04 payload size, in bytes after the report ID byte.
+    private const int DIAG_PAYLOAD_SIZE = 56;
 
     // Commands
     private const byte CMD_SAVE_CONFIG = 0x01;
     private const byte CMD_RESET_DEFAULTS = 0x02;
     private const byte CMD_RESET_POSITIONS = 0x03;
     private const byte CMD_READ_CONFIG = 0x04;
+    private const byte CMD_RESET_DIAG = 0x05;
 
     // ========================================================================
     // CONFIG DATA STRUCTURES
@@ -206,6 +211,14 @@ public class Program
     private static HidDevice? _hidDevice;
     private static bool _configReceived;
     private static readonly object _lock = new();
+
+    // Decoder diagnostics (Input Report ID 0x04). All guarded by _lock.
+    private static readonly byte[] _diagRawPins = new byte[NUM_ENCODERS];
+    private static readonly uint[] _diagEdgeCount = new uint[NUM_ENCODERS];
+    private static readonly uint[] _diagInvalidCount = new uint[NUM_ENCODERS];
+    private static readonly uint[] _diagDetentCount = new uint[NUM_ENCODERS];
+    private static byte _diagStepsPerDetent;
+    private static DateTime _diagLastSeenUtc = DateTime.MinValue;
 
     // ========================================================================
     // KEYBOARD HOOK CONFIGURATION (for Keyboard HID mode)
@@ -442,6 +455,25 @@ public class Program
                         _deviceConfig = parsed;
                         _configReceived = true;
                     }
+                }
+            }
+            else if (reportId == REPORT_ID_DIAG && report.Data.Length >= DIAG_PAYLOAD_SIZE + 1)
+            {
+                // Input Report ID 0x04: 56 bytes of decoder diagnostics.
+                // HidLibrary prepends the report ID, so buffer index = payload offset + 1.
+                lock (_lock)
+                {
+                    for (int i = 0; i < NUM_ENCODERS; i++)
+                        _diagRawPins[i] = report.Data[1 + i];            // payload 0-3
+                    _diagStepsPerDetent = report.Data[5];                // payload 4
+                                                                          // payload 5-7 reserved
+                    for (int i = 0; i < NUM_ENCODERS; i++)
+                    {
+                        _diagEdgeCount[i]    = BitConverter.ToUInt32(report.Data, 9  + i * 4);  // payload 8-23
+                        _diagInvalidCount[i] = BitConverter.ToUInt32(report.Data, 25 + i * 4);  // payload 24-39
+                        _diagDetentCount[i]  = BitConverter.ToUInt32(report.Data, 41 + i * 4);  // payload 40-55
+                    }
+                    _diagLastSeenUtc = DateTime.UtcNow;
                 }
             }
         }
