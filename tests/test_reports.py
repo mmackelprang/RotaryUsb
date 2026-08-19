@@ -154,3 +154,44 @@ def test_pack_accepts_unsigned_accumulator_values():
     data = pack_position_report([0] * 4, 0, 0, [0xFFFFFFFF, 0x80000000, 0, 1])
     assert struct.unpack_from("<i", data, 20)[0] == -1
     assert struct.unpack_from("<i", data, 24)[0] == -2147483648
+
+
+# ---- Semantics the firmware decode path must honor ----
+
+def test_movement_accrues_while_position_is_clamped():
+    """
+    The whole point of the feature: at max_value, position stops and movement
+    does not. Models the firmware's per-detent sequence.
+    """
+    from config import clamp_position  # sys.path already set at module top
+
+    min_value, max_value, step_size = 0, 100, 1
+    position, movement = 100, 0  # already pinned at max
+
+    for _ in range(5):
+        effective_step = step_size * 1
+        movement = accumulate_movement(movement, 1 * effective_step)
+        position = clamp_position(position + 1 * effective_step,
+                                  min_value, max_value, False)
+
+    assert position == 100, "position must stay clamped"
+    assert to_signed_i32(movement) == 5, "movement must keep accruing at the limit"
+
+
+def test_movement_reverses_at_the_limit():
+    from config import clamp_position
+
+    position, movement = 100, 0
+    for _ in range(3):
+        movement = accumulate_movement(movement, -1)
+        position = clamp_position(position - 1, 0, 100, False)
+
+    assert position == 97
+    assert to_signed_i32(movement) == -3
+
+
+def test_diag_report_packs_counters_that_survive_clamping():
+    """detent_count is incremented before position math, so it counts at a limit."""
+    data = pack_diag_report([7] * 4, 4, [40, 0, 0, 0], [0] * 4, [10, 0, 0, 0])
+    assert struct.unpack_from("<I", data, 8)[0] == 40    # edges
+    assert struct.unpack_from("<I", data, 40)[0] == 10   # detents
