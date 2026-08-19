@@ -13,8 +13,6 @@ import os
 import re
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "firmware"))
 
 from reports import POSITION_REPORT_SIZE, DIAG_REPORT_SIZE
@@ -122,7 +120,6 @@ def test_descriptor_is_not_trivially_empty():
 
 # ---- Derived sizes agree with every other declaration of them ----
 
-@pytest.mark.xfail(reason="descriptor still declares the 21-byte report 0x01; Task 3 resizes it")
 def test_derived_report_sizes():
     sizes = walk_descriptor(cpp_descriptor())
     assert sizes[("in", 1)] == POSITION_REPORT_SIZE

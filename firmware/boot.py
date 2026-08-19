@@ -6,7 +6,7 @@ CircuitPython boot.py for Generic HID Mode — Runtime Configuration
 This boot.py configures the Raspberry Pi Pico to expose a vendor-defined
 Generic HID device with runtime configuration support. The device uses:
 
-  Input Report ID 0x01 (21 bytes): Absolute encoder positions + buttons + tiers
+  Input Report ID 0x01 (36 bytes): Positions + buttons + tiers + movement
   Input Report ID 0x02 (106 bytes): Config readback
   Input Report ID 0x04 (56 bytes): Decoder diagnostics, 10 Hz
   Output Report ID 0x02 (106 bytes): Config write
@@ -32,7 +32,7 @@ storage.remount("/", readonly=False)
 # Usage Page: 0xFF00 (Vendor Defined)
 # Usage: 0x01 (Vendor Usage 1)
 #
-# Input Report ID 0x01 — 21 bytes: encoder positions + buttons + tiers
+# Input Report ID 0x01 — 36 bytes: positions + buttons + tiers + movement
 # Input Report ID 0x02 — 106 bytes: config readback
 # Input Report ID 0x04 — 56 bytes: decoder diagnostics
 # Output Report ID 0x02 — 106 bytes: config write
@@ -46,7 +46,7 @@ GENERIC_HID_REPORT_DESCRIPTOR = bytes([
     0x09, 0x01,        # Usage (Vendor Usage 1)
     0xA1, 0x01,        # Collection (Application)
 
-    # ---- Input Report ID 0x01: Encoder Positions (21 bytes) ----
+    # ---- Input Report ID 0x01: Encoder Positions (36 bytes) ----
     0x85, 0x01,        #   Report ID (1)
 
     # 4 encoder positions as 32-bit signed values (16 raw bytes)
@@ -70,12 +70,22 @@ GENERIC_HID_REPORT_DESCRIPTOR = bytes([
     0x95, 0x04,        #   Report Count (4 padding bits)
     0x81, 0x03,        #   Input (Constant, Variable, Absolute) - Padding
 
-    # Acceleration tier byte + 3 reserved bytes (4 bytes)
+    # Acceleration tier byte + 2 reserved bytes (3 bytes)
     0x09, 0x04,        #   Usage (Vendor Usage 4 - Tier + Reserved)
     0x15, 0x00,        #   Logical Minimum (0)
     0x26, 0xFF, 0x00,  #   Logical Maximum (255)
     0x75, 0x08,        #   Report Size (8 bits)
-    0x95, 0x04,        #   Report Count (4: tier byte + 3 reserved)
+    0x95, 0x03,        #   Report Count (3: tier byte + 2 reserved)
+    0x81, 0x02,        #   Input (Data, Variable, Absolute)
+
+    # Movement accumulators (16 bytes = 4x int32)
+    # Free-running signed totals; the host differences them. Keeps accruing when
+    # position is clamped at min_value/max_value, which is the entire point.
+    0x09, 0x09,        #   Usage (Vendor Usage 9 - Movement Accumulators)
+    0x15, 0x00,        #   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  #   Logical Maximum (255)
+    0x75, 0x08,        #   Report Size (8 bits)
+    0x95, 0x10,        #   Report Count (16 bytes = 4x int32)
     0x81, 0x02,        #   Input (Data, Variable, Absolute)
 
     # ---- Input Report ID 0x02: Config Readback (106 bytes) ----
@@ -120,14 +130,14 @@ GENERIC_HID_REPORT_DESCRIPTOR = bytes([
 # report_ids: all report IDs used across Input and Output reports
 # in_report_lengths / out_report_lengths: indexed by POSITION in report_ids,
 #   not by report ID value.
-#   ID 1 = 21B in  / no out     ID 2 = 106B in / 106B out
+#   ID 1 = 36B in  / no out     ID 2 = 106B in / 106B out
 #   ID 3 = no in   / 2B out     ID 4 = 56B in  / no out
 GENERIC_HID_DEVICE = usb_hid.Device(
     report_descriptor=GENERIC_HID_REPORT_DESCRIPTOR,
     usage_page=0xFF00,                      # Vendor Defined
     usage=0x01,                             # Vendor Usage 1
     report_ids=(1, 2, 3, 4),                # All report IDs
-    in_report_lengths=(21, 106, 0, 56),     # Input Report sizes per ID
+    in_report_lengths=(36, 106, 0, 56),     # Input Report sizes per ID
     out_report_lengths=(0, 106, 2, 0),      # Output Report sizes per ID
 )
 
@@ -135,5 +145,5 @@ GENERIC_HID_DEVICE = usb_hid.Device(
 usb_hid.enable((GENERIC_HID_DEVICE,))
 
 print("RotaryUsb Generic HID mode enabled (runtime config)")
-print("Input Reports: ID1=positions(21B), ID2=config_readback(106B), ID4=diagnostics(56B)")
+print("Input Reports: ID1=positions(36B), ID2=config_readback(106B), ID4=diagnostics(56B)")
 print("Output Reports: ID2=config_write(106B), ID3=commands(2B)")
