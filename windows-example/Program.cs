@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2024 RotaryUsb Project
+﻿// SPDX-FileCopyrightText: 2024 RotaryUsb Project
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -41,6 +41,12 @@ public class Program
 
     // Input Report ID 0x04 payload size, in bytes after the report ID byte.
     private const int DIAG_PAYLOAD_SIZE = 56;
+
+    // Input Report ID 0x01 payload size, in bytes after the report ID byte.
+    private const int POSITION_PAYLOAD_SIZE = 36;
+
+    // Firmware built before the movement accumulator sends 21 payload bytes.
+    private const int LEGACY_POSITION_PAYLOAD_SIZE = 21;
 
     // Commands
     private const byte CMD_SAVE_CONFIG = 0x01;
@@ -211,6 +217,13 @@ public class Program
     private static HidDevice? _hidDevice;
     private static bool _configReceived;
     private static readonly object _lock = new();
+
+    // Movement accumulator (Input Report ID 0x01, payload 20-35). All guarded by _lock.
+    private static readonly int[] _movementRaw = new int[NUM_ENCODERS];
+    private static readonly int[] _movementLast = new int[NUM_ENCODERS];
+    private static readonly long[] _hostAccumulated = new long[NUM_ENCODERS];
+    private static bool _movementBaselined;
+    private static bool _firmwareHasMovement;
 
     // Decoder diagnostics (Input Report ID 0x04). All guarded by _lock.
     private static readonly byte[] _diagRawPins = new byte[NUM_ENCODERS];
@@ -430,16 +443,42 @@ public class Program
 
             byte reportId = report.Data[0];
 
-            if (reportId == REPORT_ID_POSITIONS && report.Data.Length >= 22)
+            if (reportId == REPORT_ID_POSITIONS
+                && report.Data.Length >= LEGACY_POSITION_PAYLOAD_SIZE + 1)
             {
-                // Input Report ID 0x01: 21 bytes of position data
-                // HidLibrary prepends report ID, so data[1..21] is payload
+                // Input Report ID 0x01. HidLibrary prepends the report ID, so
+                // buffer index = payload offset + 1.
                 lock (_lock)
                 {
                     for (int i = 0; i < NUM_ENCODERS; i++)
                         _encoderPositions[i] = BitConverter.ToInt32(report.Data, 1 + i * 4);
-                    _buttonStates = report.Data[17];
-                    _tierByte = report.Data[18];
+                    _buttonStates = report.Data[17];   // payload 16
+                    _tierByte = report.Data[18];       // payload 17
+
+                    if (report.Data.Length >= POSITION_PAYLOAD_SIZE + 1)
+                    {
+                        _firmwareHasMovement = true;
+                        for (int i = 0; i < NUM_ENCODERS; i++)
+                        {
+                            int now = BitConverter.ToInt32(report.Data, 21 + i * 4); // payload 20-35
+                            _movementRaw[i] = now;
+
+                            if (_movementBaselined)
+                            {
+                                // unchecked: the accumulator wraps at 32 bits by
+                                // design, and two's-complement subtraction yields
+                                // the correct signed delta straight across the
+                                // boundary. This is the pattern integrators copy.
+                                int delta = unchecked(now - _movementLast[i]);
+                                _hostAccumulated[i] += delta;
+                            }
+                            _movementLast[i] = now;
+                        }
+                        // Baseline on the first report so a device that was
+                        // already spinning before we attached does not dump its
+                        // whole history into the first delta.
+                        _movementBaselined = true;
+                    }
                 }
             }
             else if (reportId == REPORT_ID_CONFIG && report.Data.Length >= FULL_CONFIG_SIZE + 1)
@@ -602,18 +641,24 @@ public class Program
 
             lock (_lock)
             {
+                Console.WriteLine("        Position         Range      Movement     Unbounded  Tier".PadRight(78));
                 for (int i = 0; i < NUM_ENCODERS; i++)
                 {
                     var enc = _deviceConfig.Encoders[i];
                     int tier = (_tierByte >> (i * 2)) & 0x03;
                     string tierStr = tier switch
                     {
-                        1 => "  * Tier 1",
-                        2 => "  ** Tier 2",
-                        3 => "  *** Tier 3",
+                        1 => "*",
+                        2 => "**",
+                        3 => "***",
                         _ => ""
                     };
-                    Console.WriteLine($"Enc{i + 1}: {_encoderPositions[i],10}  [{enc.MinValue}-{enc.MaxValue}]{tierStr,-20}");
+                    string range = $"[{enc.MinValue}-{enc.MaxValue}]";
+                    string movement = _firmwareHasMovement ? _movementRaw[i].ToString() : "n/a";
+                    string unbounded = _firmwareHasMovement ? _hostAccumulated[i].ToString() : "n/a";
+                    Console.WriteLine(
+                        $"Enc{i + 1}: {_encoderPositions[i],10}  {range,-12} {movement,12} {unbounded,13}  {tierStr,-3}"
+                            .PadRight(78));
                 }
 
                 Console.WriteLine();
@@ -624,6 +669,17 @@ public class Program
                     Console.Write(pressed ? "[X] " : "[ ] ");
                 }
                 Console.WriteLine("          ");
+
+                Console.WriteLine();
+                if (_firmwareHasMovement)
+                {
+                    Console.WriteLine("Turn a knob to its limit and keep turning:".PadRight(78));
+                    Console.WriteLine("Position holds; Movement and Unbounded keep moving.".PadRight(78));
+                }
+                else
+                {
+                    Console.WriteLine("Firmware predates the movement accumulator (21-byte report).".PadRight(78));
+                }
             }
 
             Thread.Sleep(50);
