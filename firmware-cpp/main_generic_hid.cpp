@@ -11,7 +11,7 @@
  * Output Reports, with flash persistence.
  *
  * HID REPORT FORMAT:
- *   Input Report ID 0x01 (21 bytes): Encoder positions + buttons + tiers
+ *   Input Report ID 0x01 (36 bytes): Positions + buttons + tiers + movement
  *   Input Report ID 0x02 (106 bytes): Config readback
  *   Input Report ID 0x04 (56 bytes): Decoder diagnostics, 10 Hz
  *   Output Report ID 0x02 (106 bytes): Config write
@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cstddef>
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
 #include "hardware/flash.h"
@@ -67,15 +68,21 @@ static_assert(sizeof(TierConfig) == 4, "TierConfig must be 4 bytes");
 static_assert(sizeof(EncoderConfig) == 26, "EncoderConfig must be 26 bytes");
 static_assert(sizeof(DeviceConfig) == FULL_CONFIG_SIZE, "DeviceConfig must be 106 bytes");
 
-// Input Report: absolute positions + buttons + tiers
+// Input Report: absolute positions + buttons + tiers + movement accumulators
 struct PositionReport {
-    int32_t positions[NUM_ENCODERS];
-    uint8_t button_states;
-    uint8_t active_tiers;  // packed 2-bit fields
-    uint8_t reserved[3];
+    int32_t positions[NUM_ENCODERS];   // 0-15
+    uint8_t button_states;             // 16
+    uint8_t active_tiers;              // 17  packed 2-bit fields
+    uint8_t reserved[2];               // 18-19
+    // Free-running signed accumulators, same units as positions[]. Placed at a
+    // 4-byte-aligned offset: the RP2040 is a Cortex-M0+, which HardFaults on
+    // unaligned word access.
+    int32_t movement[NUM_ENCODERS];    // 20-35
 } __attribute__((packed));
 
-static_assert(sizeof(PositionReport) == 21, "PositionReport must be 21 bytes");
+static_assert(sizeof(PositionReport) == 36, "PositionReport must be 36 bytes");
+static_assert(offsetof(PositionReport, movement) == 20,
+              "movement must be 4-byte aligned at offset 20");
 
 // Input Report ID 0x04: decoder diagnostics (56 bytes)
 //
@@ -302,12 +309,22 @@ static const uint8_t hid_report_descriptor[] = {
     0x95, 0x04,        //   Report Count (4 padding bits)
     0x81, 0x03,        //   Input (Constant, Variable, Absolute)
 
-    // Acceleration tier byte + 3 reserved bytes (4 bytes)
+    // Acceleration tier byte + 2 reserved bytes (3 bytes)
     0x09, 0x04,        //   Usage (Vendor Usage 4 - Tier + Reserved)
     0x15, 0x00,        //   Logical Minimum (0)
     0x26, 0xFF, 0x00,  //   Logical Maximum (255)
     0x75, 0x08,        //   Report Size (8 bits)
-    0x95, 0x04,        //   Report Count (4: tier byte + 3 reserved)
+    0x95, 0x03,        //   Report Count (3: tier byte + 2 reserved)
+    0x81, 0x02,        //   Input (Data, Variable, Absolute)
+
+    // Movement accumulators (16 bytes = 4x int32)
+    // Free-running signed totals; the host differences them. Keeps accruing when
+    // position is clamped at min_value/max_value, which is the entire point.
+    0x09, 0x09,        //   Usage (Vendor Usage 9 - Movement Accumulators)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  //   Logical Maximum (255)
+    0x75, 0x08,        //   Report Size (8 bits)
+    0x95, 0x10,        //   Report Count (16 bytes = 4x int32)
     0x81, 0x02,        //   Input (Data, Variable, Absolute)
 
     // ---- Input Report ID 0x02: Config Readback (106 bytes) ----
@@ -391,6 +408,7 @@ public:
         , edge_count_(0)
         , invalid_count_(0)
         , detent_count_(0)
+        , movement_(0)
     {}
 
     void init() {
@@ -419,6 +437,8 @@ public:
         steps_per_detent_ = steps_per_detent;
     }
 
+    // Resets position only. movement_ is deliberately untouched — see its
+    // declaration below.
     void reset_position() {
         if (config_) {
             position_ = config_->min_value;
@@ -430,6 +450,15 @@ public:
 
     int32_t get_position() const { return position_; }
     uint8_t get_active_tier() const { return active_tier_; }
+
+    // Free-running movement accumulator, reinterpreted for the wire.
+    // memcpy, not a cast: converting an out-of-range uint32_t to int32_t is
+    // implementation-defined before C++20, and this project builds C++17.
+    int32_t get_movement() const {
+        int32_t out;
+        memcpy(&out, &movement_, sizeof(out));
+        return out;
+    }
 
     // ---- Decoder diagnostics (Input Report ID 0x04) ----
 
@@ -493,6 +522,12 @@ public:
                     active_tier_ = tier.tier_index;
 
                     int32_t effective_step = compute_effective_step(config_->step_size, tier.multiplier);
+
+                    // Accumulated pre-clamp, so motion is still reported when
+                    // position_ is pinned at min_value or max_value. int64
+                    // intermediate because compute_effective_step() can return
+                    // INT32_MIN, and negating that in int32 is undefined behavior.
+                    movement_ += (uint32_t)((int64_t)detent_direction * (int64_t)effective_step);
 
                     // Update position
                     int64_t new_pos = (int64_t)position_ + (int64_t)detent_direction * (int64_t)effective_step;
@@ -585,6 +620,14 @@ private:
     uint32_t edge_count_;
     uint32_t invalid_count_;
     uint32_t detent_count_;
+
+    // Free-running signed movement accumulator, in the same units as position_.
+    // uint32_t because signed overflow is undefined behavior in C++ and this value
+    // is expected to wrap; the wire reinterprets the bit pattern as int32.
+    // Deliberately NOT reset by reset_position(): position and movement answer
+    // different questions, and zeroing an odometer because the dial was re-zeroed
+    // injects a phantom delta into every host that is differencing it.
+    uint32_t movement_;
 
     static constexpr uint32_t BUTTON_DEBOUNCE_US = 20000;  // 20ms
     static const int8_t TRANSITION_TABLE[16];
@@ -798,6 +841,7 @@ static void hid_task() {
     uint8_t tier_byte = 0;
     for (size_t i = 0; i < NUM_ENCODERS; i++) {
         current_report.positions[i] = encoders[i]->get_position();
+        current_report.movement[i] = encoders[i]->get_movement();
         tier_byte |= (encoders[i]->get_active_tier() & 0x03) << (i * 2);
     }
     current_report.button_states = cached_button_states;

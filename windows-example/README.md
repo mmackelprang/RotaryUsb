@@ -138,7 +138,7 @@ Keyboard hook installed successfully.
 
 ## Generic HID Report Format
 
-When using Generic HID mode with runtime configuration, the device sends 21-byte position reports (Input Report ID 0x01):
+When using Generic HID mode with runtime configuration, the device sends 36-byte position reports (Input Report ID 0x01):
 
 | Offset | Type | Description |
 |--------|------|-------------|
@@ -148,13 +148,44 @@ When using Generic HID mode with runtime configuration, the device sends 21-byte
 | 12-15 | int32 LE | Encoder 4 absolute position |
 | 16 | uint8 | Button states (bit 0-3 = buttons 1-4) |
 | 17 | uint8 | Active acceleration tiers (packed 2-bit per encoder) |
-| 18-20 | uint8[3] | Reserved (0x00) |
+| 18-19 | uint8[2] | Reserved (0x00) |
+| 20-35 | int32[4] LE | Movement accumulators, one per encoder |
+
+**Movement accumulators** are free-running signed totals in the same units as
+position. Unlike position, they keep accruing when the knob is held against
+`min_value` or `max_value`, so the host still sees motion at a limit. Difference
+successive samples to get movement, using wrapping arithmetic:
+
+```csharp
+int delta = unchecked(now - last);   // correct across the 32-bit wrap
+```
+
+The accumulator resets only at power-on — `Reset positions` deliberately leaves
+it alone. See `docs/INTEGRATION.md` for the full contract.
+
+## Live Monitor Columns
+
+| Column | Meaning |
+|--------|---------|
+| Position | Absolute position, clamped to the configured range |
+| Range | The encoder's configured `[min-max]` |
+| Movement | Raw movement accumulator as sent by the device |
+| Unbounded | Host-side running total, accumulated from the movement delta |
+| Tier | Active acceleration tier (`*` / `**` / `***`) |
+
+`Unbounded` demonstrates the pattern an integrating application uses for a
+control whose range exceeds anything the firmware can hold, such as a VFO
+frequency. Turn a knob to its limit and keep turning: **Position holds while
+Movement and Unbounded keep moving.**
+
+Against firmware built before the movement accumulator (a 21-byte report), the
+Movement and Unbounded columns show `n/a` rather than misparsing a short buffer.
 
 ## Runtime Configuration Menu
 
 In Generic HID mode, the application provides an interactive configuration menu:
 
-- **[M] Monitor** - Live display of encoder positions and acceleration tiers
+- **[M] Monitor** - Live display of encoder positions, movement, and acceleration tiers
 - **[C] Configure** - Edit per-encoder settings (min/max/step/wrap/reverse/acceleration)
 - **[S] Save** - Save current config to device flash
 - **[D] Defaults** - Reset device to factory defaults

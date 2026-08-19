@@ -365,7 +365,7 @@ selection, so check the build log if you are unsure what you flashed:
 
 ### HID Report Format (Generic HID Mode)
 
-When using Generic HID mode, the device sends 21-byte position reports (Input Report ID 0x01):
+When using Generic HID mode, the device sends 36-byte position reports (Input Report ID 0x01):
 
 | Offset | Type | Description |
 |--------|------|-------------|
@@ -375,7 +375,32 @@ When using Generic HID mode, the device sends 21-byte position reports (Input Re
 | 12-15 | int32 LE | Encoder 4 absolute position |
 | 16 | uint8 | Button states (bit 0-3 = buttons 1-4) |
 | 17 | uint8 | Active acceleration tiers (packed 2-bit per encoder) |
-| 18-20 | uint8[3] | Reserved (0x00) |
+| 18-19 | uint8[2] | Reserved (0x00) |
+| 20-35 | int32[4] LE | Movement accumulators, one per encoder |
+
+#### Movement Accumulators
+
+`position` is clamped to `[min_value, max_value]`. Because the device only transmits when
+the report contents change, a knob held against a limit stops transmitting entirely — the
+knob goes silent while the operator is still turning it.
+
+`movement` is a free-running signed accumulator updated **before** clamping, so it keeps
+accruing at a limit. That both provides the motion signal and makes the device transmit
+again. It is measured in the same units as position (`step_size x tier_multiplier`), so a
+host reproduces device-identical feel, acceleration included, without knowing the tier
+config.
+
+- Difference successive samples to get movement; it is a running total, not a per-report delta.
+- It **wraps** at 32 bits rather than saturating — difference it with wrapping arithmetic
+  (`unchecked` in C#) and the wrap is invisible.
+- It is **not** reset by `Reset positions` or `Reset defaults`; only a power cycle zeroes it.
+- Under `wrap = 1`, position wraps while movement continues monotonically.
+
+Hosts feature-detect by report length: `InputReportByteLength` is 37 with the accumulator
+and 22 without. Payload bytes 0-17 are unchanged, so older parsing code still reads
+positions, buttons and tiers correctly.
+
+See `docs/INTEGRATION.md` for the full host-side contract.
 
 ### USB Identifiers (Generic HID Mode)
 
@@ -400,7 +425,7 @@ Generic HID mode supports runtime configuration from the host application. The d
 
 | Report | Direction | Size | Description |
 |--------|-----------|------|-------------|
-| Input ID 0x01 | Device → Host | 21 bytes | Absolute positions + buttons + tiers |
+| Input ID 0x01 | Device → Host | 36 bytes | Positions + buttons + tiers + movement |
 | Input ID 0x02 | Device → Host | 106 bytes | Config readback |
 | Input ID 0x04 | Device → Host | 56 bytes | Decoder diagnostics (10 Hz) |
 | Output ID 0x02 | Host → Device | 106 bytes | Full config write |

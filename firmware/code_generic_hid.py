@@ -15,19 +15,25 @@ PREREQUISITES:
 Copy this file to the CIRCUITPY drive as code.py after installing CircuitPython.
 
 HID REPORT FORMAT:
-  Input Report ID 0x01 (21 bytes):
-    Bytes 0-15: 4x int32 LE encoder positions
+  Input Report ID 0x01 (36 bytes):
+    Bytes 0-15: 4x int32 LE encoder positions (clamped to [min, max])
     Byte 16: Button states (bits 0-3)
     Byte 17: Active acceleration tiers (packed 2-bit fields)
-    Bytes 18-20: Reserved (0x00)
+    Bytes 18-19: Reserved (0x00)
+    Bytes 20-35: 4x int32 LE movement accumulators
+
+  Movement is a free-running signed total in the same units as position. It
+  keeps accruing when position is clamped at min_value/max_value, so a host
+  still sees motion at a limit. The host differences it; see reports.py
+  movement_delta() for the wrap-correct arithmetic.
 
   Input Report ID 0x02 (106 bytes): Config readback
+  Input Report ID 0x04 (56 bytes): Decoder diagnostics, 10 Hz
   Output Report ID 0x02 (106 bytes): Config write
   Output Report ID 0x03 (2 bytes): Commands
 """
 
 import time
-import struct
 import board
 import digitalio
 import usb_hid
@@ -37,6 +43,10 @@ from config import (
     factory_default_config, validate_config,
     clamp_position, select_acceleration_tier, compute_effective_step,
     FULL_CONFIG_SIZE,
+)
+from reports import (
+    accumulate_movement, pack_position_report, pack_diag_report,
+    POSITION_REPORT_SIZE,
 )
 
 # ============================================================================
@@ -68,6 +78,7 @@ CMD_SAVE_CONFIG = 0x01
 CMD_RESET_DEFAULTS = 0x02
 CMD_RESET_POSITIONS = 0x03
 CMD_READ_CONFIG = 0x04
+CMD_RESET_DIAG = 0x05
 
 # ============================================================================
 # FLASH PERSISTENCE
@@ -154,6 +165,19 @@ class Encoder:
         self.last_detent_time = time.monotonic()
         self.active_tier = 0
 
+        # Free-running signed movement accumulator, same units as position.
+        # Held unsigned and masked to 32 bits; the wire reinterprets it as int32.
+        # Deliberately NOT cleared by reset_position(): position and movement
+        # answer different questions, and zeroing an odometer because the dial
+        # was re-zeroed injects a phantom delta into every differencing host.
+        self.movement = 0
+
+        # Decoder diagnostics (Input Report ID 0x04). Monotonic totals across
+        # both directions; the host zeroes them with command 0x05.
+        self.edge_count = 0
+        self.invalid_count = 0
+        self.detent_count = 0
+
         # Button state tracking (first-edge-latch debounce)
         self.last_button_state = self.pin_sw.value
         self.button_pressed = False
@@ -165,13 +189,35 @@ class Encoder:
         b_val = 0 if self.pin_b.value else 1
         return (a_val << 1) | b_val
 
+    def read_raw_pins(self):
+        """
+        Literal GPIO levels, NOT inverted: (A<<2)|(B<<1)|SW.
+
+        With internal pull-ups and nothing pressed this reads 7 (0b111); a held
+        button clears bit 0 giving 6.
+
+        WARNING: this is the opposite convention from _read_ab_state(), which
+        inverts to active-high for the quadrature transition table. Two readers,
+        two conventions, on purpose. Do not substitute one for the other.
+        """
+        a = 1 if self.pin_a.value else 0
+        b = 1 if self.pin_b.value else 0
+        sw = 1 if self.pin_sw.value else 0
+        return (a << 2) | (b << 1) | sw
+
+    def reset_diagnostics(self):
+        """Zero the diagnostic counters. Does not touch movement or position."""
+        self.edge_count = 0
+        self.invalid_count = 0
+        self.detent_count = 0
+
     def apply_config(self, config, steps_per_detent):
         """Apply new config without resetting position."""
         self.config = config
         self.steps_per_detent = steps_per_detent
 
     def reset_position(self):
-        """Reset position to min_value."""
+        """Reset position to min_value. Deliberately does not touch movement."""
         self.position = self.config.min_value
         self.active_tier = 0
 
@@ -184,6 +230,7 @@ class Encoder:
         current_ab_state = self._read_ab_state()
 
         if current_ab_state != self.last_ab_state:
+            self.edge_count += 1
             transition = (self.last_ab_state, current_ab_state)
             direction = self.TRANSITION_TABLE.get(transition, 0)
 
@@ -193,6 +240,10 @@ class Encoder:
                 self.steps += direction
 
                 if self.steps >= self.steps_per_detent or self.steps <= -self.steps_per_detent:
+                    # Counted before the position math, so clamping at min_value
+                    # or max_value does not hide emitted detents.
+                    self.detent_count += 1
+
                     detent_direction = 1 if self.steps > 0 else -1
                     self.steps = 0
 
@@ -208,6 +259,11 @@ class Encoder:
                     effective_step = compute_effective_step(
                         cfg.step_size, multiplier)
 
+                    # Accumulated pre-clamp, so motion is still reported when
+                    # position is pinned at min_value or max_value.
+                    self.movement = accumulate_movement(
+                        self.movement, detent_direction * effective_step)
+
                     # Update position
                     self.position += detent_direction * effective_step
                     self.position = clamp_position(
@@ -217,6 +273,11 @@ class Encoder:
                         dir_str = "CW" if detent_direction > 0 else "CCW"
                         print(f"Enc{self.encoder_id}: {dir_str} pos={self.position} tier={tier_idx}")
             else:
+                # TRANSITION_TABLE has no entry here only for a simultaneous A+B
+                # change, which is physically impossible in clean quadrature.
+                # This counts contact bounce, a marginal connection, or a missed
+                # poll. Never a decoder logic error.
+                self.invalid_count += 1
                 self.steps = 0
 
             self.last_ab_state = current_ab_state
@@ -300,9 +361,14 @@ def main():
 
     # State
     last_report_time = time.monotonic()
-    last_report = bytearray(21)
+    last_report = bytearray(POSITION_REPORT_SIZE)
     pending_config_readback = False
     readback_retry_time = 0  # Rate-limit readback retries
+
+    # Diagnostics heartbeat (Input Report ID 0x04). 10 Hz x 57 bytes on the wire
+    # is ~570 B/s, negligible on a full-speed interrupt endpoint.
+    last_diag_time = time.monotonic()
+    DIAG_INTERVAL = 0.100
 
     # Main loop
     while True:
@@ -353,6 +419,11 @@ def main():
                     print("All positions reset")
             elif command == CMD_READ_CONFIG:
                 pending_config_readback = True
+            elif command == CMD_RESET_DIAG:
+                for enc in encoders:
+                    enc.reset_diagnostics()
+                if DEBUG_ENABLED:
+                    print("Diagnostic counters reset")
 
         # Send config readback if requested (rate-limited retries)
         current_time = time.monotonic()
@@ -370,19 +441,18 @@ def main():
 
         # Send position report at regular intervals
         if (current_time - last_report_time) >= REPORT_INTERVAL:
-            # Build the 21-byte Input Report
+            # Build the 36-byte Input Report
             # Pack tier info: 2 bits per encoder
             tier_byte = 0
             for i, enc in enumerate(encoders):
                 tier_byte |= (enc.active_tier & 0x03) << (i * 2)
 
-            report = struct.pack("<iiiiBBxxx",
-                                 encoders[0].position,
-                                 encoders[1].position,
-                                 encoders[2].position,
-                                 encoders[3].position,
-                                 button_states,
-                                 tier_byte)
+            report = pack_position_report(
+                [enc.position for enc in encoders],
+                button_states,
+                tier_byte,
+                [enc.movement for enc in encoders],
+            )
 
             # Only send if something changed
             if report != last_report:
@@ -395,6 +465,24 @@ def main():
                 last_report = bytearray(report)
 
             last_report_time = current_time
+
+        # Diagnostics (ID 0x04) are lowest priority: the position report above
+        # takes precedence. Positions only change on detents, so the 10 Hz
+        # cadence holds in practice.
+        if (current_time - last_diag_time) >= DIAG_INTERVAL:
+            last_diag_time = current_time
+            try:
+                diag = pack_diag_report(
+                    [enc.read_raw_pins() for enc in encoders],
+                    steps_per_detent,
+                    [enc.edge_count for enc in encoders],
+                    [enc.invalid_count for enc in encoders],
+                    [enc.detent_count for enc in encoders],
+                )
+                hid_device.send_report(diag, 4)  # Report ID 4
+            except Exception as e:
+                if DEBUG_ENABLED:
+                    print(f"Error sending diag report: {e}")
 
         time.sleep(LOOP_DELAY)
 

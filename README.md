@@ -10,6 +10,11 @@ This repository contains:
 - **[firmware-cpp/](firmware-cpp/)** - C++ firmware (high-performance, requires Pico SDK)
 - **[windows-example/](windows-example/)** - C# example for reading encoder data on Windows
 
+> **Integrating RotaryUsb into your own application?** Start with
+> **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — the complete host-side guide: wire
+> protocol, discovery, a drop-in C# reference class, mapping recipes, and gotchas. It is
+> written to be sufficient without reading firmware source.
+
 ### Operating Modes
 
 RotaryUsb supports two HID modes:
