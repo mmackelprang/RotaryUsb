@@ -162,7 +162,7 @@ Modify `BUTTON_DEBOUNCE_TIME` (default: 20ms) if buttons are too sensitive or un
 
 ### HID Report Format
 
-When using Generic HID mode, the device sends 21-byte position reports (Input Report ID 0x01):
+When using Generic HID mode, the device sends 36-byte position reports (Input Report ID 0x01):
 
 | Offset | Type | Description |
 |--------|------|-------------|
@@ -172,7 +172,49 @@ When using Generic HID mode, the device sends 21-byte position reports (Input Re
 | 12-15 | int32 LE | Encoder 4 absolute position |
 | 16 | uint8 | Button states (bit 0-3 = buttons 1-4) |
 | 17 | uint8 | Active acceleration tiers (packed 2-bit per encoder) |
-| 18-20 | uint8[3] | Reserved (0x00) |
+| 18-19 | uint8[2] | Reserved (0x00) |
+| 20-35 | int32[4] LE | Movement accumulators, one per encoder |
+
+#### Movement Accumulators
+
+`position` is clamped to `[min_value, max_value]`, and the device only transmits when the
+report contents change — so a knob held against a limit stops transmitting entirely.
+
+`movement` is a free-running signed accumulator updated **before** clamping, so it keeps
+accruing at a limit. It is measured in the same units as position
+(`step_size × tier_multiplier`), so acceleration is already applied.
+
+- Difference successive samples; it is a running total, not a per-report delta.
+- It **wraps** at 32 bits rather than saturating.
+- It is **not** reset by `Reset positions` or `Reset defaults` — only a power cycle.
+
+This firmware is byte-compatible with the C++ firmware; a regression test asserts the two
+HID report descriptors are identical. See `docs/INTEGRATION.md` for the host-side contract.
+
+#### Decoder Diagnostics (Input Report ID 0x04) — 56 bytes
+
+Sent at 10 Hz.
+
+| Offset | Type | Description |
+|--------|------|-------------|
+| 0-3 | uint8[4] | Raw pin state per encoder: `(A<<2)\|(B<<1)\|SW`, literal GPIO levels. Idle = 7 |
+| 4 | uint8 | `steps_per_detent` the decoder is actively using (2 or 4) |
+| 5-7 | uint8[3] | Reserved (0x00) |
+| 8-23 | uint32[4] LE | Cumulative A/B state changes observed, per encoder |
+| 24-39 | uint32[4] LE | Cumulative illegal quadrature transitions (a subset of the above) |
+| 40-55 | uint32[4] LE | Cumulative detents emitted by the decoder |
+
+Counters are monotonic across both directions and are zeroed by command 0x05.
+`detent_count` increments before position clamping, so it counts emitted detents even at
+`min_value` or `max_value`.
+
+To identify an encoder: zero the counters, turn a counted number of physical clicks, and
+divide — `edge_count / clicks` is 4 for a KY-040 class encoder and 2 for a bare-EC11 class
+one. Check `invalid_count` first; contact bounce inflates `edge_count` and can make a
+2-step encoder read as 4.
+
+**Raw pins are sampled at 10 Hz** and encoders rest at a detent with both contacts open, so
+this field reads 7 at rest even during a spin. Rotation shows up in the counters.
 
 ### USB Identifiers
 
@@ -199,10 +241,23 @@ Generic HID mode now supports runtime configuration from the host application. E
 
 | Report | Direction | Size | Description |
 |--------|-----------|------|-------------|
-| Input ID 0x01 | Device → Host | 21 bytes | 4× int32 positions + buttons + acceleration tiers |
+| Input ID 0x01 | Device → Host | 36 bytes | Positions + buttons + tiers + movement |
 | Input ID 0x02 | Device → Host | 106 bytes | Config readback (sent on command) |
+| Input ID 0x04 | Device → Host | 56 bytes | Decoder diagnostics (10 Hz) |
 | Output ID 0x02 | Host → Device | 106 bytes | Full config write |
-| Output ID 0x03 | Host → Device | 2 bytes | Commands (save/reset/readback) |
+| Output ID 0x03 | Host → Device | 2 bytes | Commands (save/reset/readback/diag) |
+
+#### Commands (Output Report ID 0x03, byte 0)
+
+| Code | Command | Effect |
+|------|---------|--------|
+| 0x01 | Save config | Write current config to `config.bin` |
+| 0x02 | Reset defaults | Restore factory config and reset positions |
+| 0x03 | Reset positions | Set every encoder position to its `min_value` |
+| 0x04 | Read config | Trigger an Input Report ID 0x02 readback |
+| 0x05 | Reset diagnostics | Zero all report ID 0x04 counters |
+
+Neither 0x02 nor 0x03 resets the movement accumulators.
 
 #### Per-Encoder Configuration
 
