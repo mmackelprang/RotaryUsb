@@ -744,6 +744,26 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     (void)instance;
     (void)report_type;
 
+    // Normalise the two delivery paths before dispatching.
+    //
+    // This device declares an interrupt OUT endpoint, so a host writing an output report sends it
+    // over that endpoint rather than as a SET_REPORT control transfer. TinyUSB surfaces the two
+    // differently: a control transfer populates report_id, while an OUT-endpoint report arrives with
+    // report_id == 0 and the real ID as the first byte of the buffer.
+    //
+    // Without this, every host-to-device report was silently dropped -- neither branch below matched,
+    // because report_id was 0. Config writes and commands both went nowhere, and the host had no way
+    // to tell: the write succeeds at the kernel, the transfer is delivered, and the device simply
+    // ignores it. Observed as "command 0x05 Reset diagnostics leaves the counters untouched".
+    //
+    // Adjusting bufsize matters as much as the ID: the guards below are length checks, and an
+    // unadjusted length is one byte too large in both.
+    if (report_id == 0 && bufsize > 0) {
+        report_id = buffer[0];
+        buffer++;
+        bufsize--;
+    }
+
     if (report_id == 0x02 && bufsize >= FULL_CONFIG_SIZE) {
         // Config write
         DeviceConfig new_config;
