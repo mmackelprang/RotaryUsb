@@ -26,6 +26,7 @@ __pycache__/
 
 # C++ / CMake build artifacts
 build/
+build-*/
 *.elf
 *.uf2
 *.bin
